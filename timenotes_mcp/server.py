@@ -240,7 +240,7 @@ def timenotes_update_time_log(
 ) -> Any:
     """Patch fields on an existing time log. Only non-null arguments are sent.
 
-    ``date`` is ``YYYY-MM-DD``; ``start_at`` is ``HH:MM``.
+    ``date`` is ``YYYY-MM-DD``; ``start_at`` is ``HH:MM``; ``duration`` is in **minutes**.
     """
     _require_auth()
     body: dict[str, Any] = {}
