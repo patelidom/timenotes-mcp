@@ -429,33 +429,38 @@ def timenotes_bulk_copy_time_logs(payload: dict[str, Any]) -> Any:
 # --- aggregate analytics ---------------------------------------------------
 
 @mcp.tool()
-def timenotes_time_per_client(from_date: str, to_date: str) -> list[dict[str, Any]]:
+def timenotes_time_per_client(from_date: str, to_date: str) -> dict[str, Any]:
     """Hours logged per client across the date range, sorted by total descending."""
     _require_auth()
-    return _client.time_per_client(from_date=from_date, to_date=to_date)
+    rows = _client.time_per_client(from_date=from_date, to_date=to_date)
+    return {"from": from_date, "to": to_date, "count": len(rows), "clients": rows}
 
 
 @mcp.tool()
-def timenotes_time_per_project(from_date: str, to_date: str) -> list[dict[str, Any]]:
-    """Hours logged per project across the date range."""
+def timenotes_time_per_project(from_date: str, to_date: str) -> dict[str, Any]:
+    """Hours logged per project across the date range, sorted by total descending."""
     _require_auth()
-    return _client.time_per_project(from_date=from_date, to_date=to_date)
+    rows = _client.time_per_project(from_date=from_date, to_date=to_date)
+    return {"from": from_date, "to": to_date, "count": len(rows), "projects": rows}
 
 
 @mcp.tool()
 def timenotes_time_per_task(
     from_date: str, to_date: str, project_id: str | None = None
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """Hours logged per task; optionally filter to a single project."""
     _require_auth()
-    return _client.time_per_task(from_date=from_date, to_date=to_date, project_id=project_id)
+    rows = _client.time_per_task(from_date=from_date, to_date=to_date, project_id=project_id)
+    return {"from": from_date, "to": to_date, "project_id": project_id,
+            "count": len(rows), "tasks": rows}
 
 
 @mcp.tool()
-def timenotes_time_per_day(from_date: str, to_date: str) -> list[dict[str, Any]]:
+def timenotes_time_per_day(from_date: str, to_date: str) -> dict[str, Any]:
     """Hours logged per day across the range."""
     _require_auth()
-    return _client.time_per_day(from_date=from_date, to_date=to_date)
+    rows = _client.time_per_day(from_date=from_date, to_date=to_date)
+    return {"from": from_date, "to": to_date, "count": len(rows), "days": rows}
 
 
 # --- clients CRUD ----------------------------------------------------------
