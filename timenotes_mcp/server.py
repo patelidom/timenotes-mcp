@@ -210,7 +210,7 @@ def timenotes_create_time_log(
     """Create a time log.
 
     Required: ``project_id``, ``task_id``, ``date`` (``YYYY-MM-DD``),
-    ``start_at`` (``HH:MM`` local time), ``duration`` in seconds.
+    ``start_at`` (``HH:MM`` local time), ``duration`` **in minutes**.
     """
     _require_auth()
     body: dict[str, Any] = {

@@ -497,7 +497,7 @@ class TimenotesClient:
 
         Required fields per the API: ``project_id``, ``task_id``, ``date``
         (``YYYY-MM-DD``), ``start_at`` (``HH:MM`` or ISO datetime), ``duration``
-        in seconds. Description and ``tag_ids`` optional.
+        in **minutes**. Description and ``tag_ids`` optional.
         """
         return self._request("POST", "/time_logs", json={"time_log": dict(time_log)})
 
@@ -692,8 +692,8 @@ class TimenotesClient:
             day = (log.get("start_at") or "")[:10] or "unknown"
             buckets[day] = buckets.get(day, 0) + int(log.get("duration") or 0)
         return [
-            {"date": day, "duration_seconds": secs, "duration_hours": round(secs / 3600, 2)}
-            for day, secs in sorted(buckets.items())
+            {"date": day, "duration_minutes": mins, "duration_hours": round(mins / 60, 2)}
+            for day, mins in sorted(buckets.items())
         ]
 
 
@@ -718,7 +718,11 @@ def _extract_filename(content_disposition: str, default: str) -> str:
 
 
 def _aggregate(logs: list[dict[str, Any]], *, key: str) -> list[dict[str, Any]]:
-    """Group time logs by ``log[key]`` (client / project / task) and sum durations."""
+    """Group time logs by ``log[key]`` (client / project / task) and sum durations.
+
+    The Timenotes API stores ``duration`` in **minutes**, not seconds — easy
+    to get wrong because the value is unitless on the wire.
+    """
     buckets: dict[str, dict[str, Any]] = {}
     for log in logs:
         ref = log.get(key) if isinstance(log, Mapping) else None
@@ -727,14 +731,14 @@ def _aggregate(logs: list[dict[str, Any]], *, key: str) -> list[dict[str, Any]]:
         rid = ref.get("id") or "(none)"
         bucket = buckets.setdefault(
             rid,
-            {"id": rid, "name": ref.get("name"), "duration_seconds": 0, "entries": 0},
+            {"id": rid, "name": ref.get("name"), "duration_minutes": 0, "entries": 0},
         )
-        bucket["duration_seconds"] += int(log.get("duration") or 0)
+        bucket["duration_minutes"] += int(log.get("duration") or 0)
         bucket["entries"] += 1
     out = list(buckets.values())
     for b in out:
-        b["duration_hours"] = round(b["duration_seconds"] / 3600, 2)
-    out.sort(key=lambda x: x["duration_seconds"], reverse=True)
+        b["duration_hours"] = round(b["duration_minutes"] / 60, 2)
+    out.sort(key=lambda x: x["duration_minutes"], reverse=True)
     return out
 
 
