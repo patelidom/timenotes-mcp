@@ -528,19 +528,30 @@ class TimenotesClient:
         from_date: str,
         to_date: str,
         type: str = "csv",
+        project_ids: list[str] | None = None,
+        user_ids: list[str] | None = None,
+        client_ids: list[str] | None = None,
         extra_params: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """GET ``/timesheets/export`` — returns a downloaded file.
 
-        ``type`` is ``csv``, ``xlsx`` or ``pdf``. Returns a dict with
-        ``content`` (bytes), ``content_type``, and ``filename`` (best guess).
+        ``type`` is ``csv``, ``xlsx`` or ``pdf``. Filter args go through the
+        ``filters[*]`` bracket-style query params (Rails convention).
         """
-        params: dict[str, Any] = {
-            "from": from_date, "to": to_date, "export[type]": type,
-        }
+        params: list[tuple[str, str]] = [
+            ("filters[from]", from_date),
+            ("filters[to]", to_date),
+            ("export[type]", type),
+        ]
+        for pid in project_ids or []:
+            params.append(("filters[project_ids][]", pid))
+        for uid in user_ids or []:
+            params.append(("filters[user_ids][]", uid))
+        for cid in client_ids or []:
+            params.append(("filters[client_ids][]", cid))
         if extra_params:
             for k, v in extra_params.items():
-                params[k] = v
+                params.append((k, str(v)))
         return self._download(
             "GET", "/timesheets/export", params=params, default_name=f"timenotes-timesheet.{type}",
         )
@@ -552,26 +563,101 @@ class TimenotesClient:
         to_date: str,
         columns: list[str],
         type: str = "csv",
+        project_ids: list[str] | None = None,
+        user_ids: list[str] | None = None,
+        client_ids: list[str] | None = None,
+        task_ids: list[str] | None = None,
+        tag_ids: list[str] | None = None,
+        timespan: str = "custom",
         extra_filters: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """POST ``/reports/detailed/export`` — returns a downloaded file.
 
-        ``columns`` must be non-empty (the API 422s with "No columns selected"
-        otherwise). Use :meth:`report_export_columns` to discover available names.
+        The request body must match a very specific shape recovered from the
+        web UI's network traffic:
+
+        * filter object lives under ``filters`` AND its key fields (``from``,
+          ``to``, ``project_hash_ids``, ``timespan``) are **also duplicated at
+          the top level** — the server reads both;
+        * dates use ``DD/MM/YYYY`` (not ISO);
+        * project filter uses ``project_hash_ids`` (the project's ``hash_id``
+          field), **not** UUID-form ``project_ids``;
+        * ``grouping``, ``page``, ``per_page``, ``rounding`` are required.
+
+        We accept ``project_ids`` (UUIDs) here for ergonomics and convert them
+        to ``project_hash_ids`` by looking up :meth:`list_projects` (v2).
         """
         if not columns:
             raise ValueError("`columns` cannot be empty for report export.")
-        body: dict[str, Any] = {
-            "from": from_date,
-            "to": to_date,
-            "export": {"type": type, "columns": list(columns)},
+
+        from_dmy = _to_dmy(from_date)
+        to_dmy = _to_dmy(to_date)
+
+        # Convert UUIDs to hash_ids (the only form the API accepts on export).
+        project_hash_ids: list[str] = []
+        if project_ids:
+            project_hash_ids = self._uuids_to_project_hash_ids(project_ids)
+
+        filters: dict[str, Any] = {
+            "from": from_dmy,
+            "to": to_dmy,
+            "timespan": timespan,
         }
+        if project_hash_ids:
+            filters["project_hash_ids"] = project_hash_ids
+        if user_ids:
+            filters["user_ids"] = list(user_ids)
+        if client_ids:
+            filters["client_ids"] = list(client_ids)
+        if task_ids:
+            filters["task_ids"] = list(task_ids)
+        if tag_ids:
+            filters["tag_ids"] = list(tag_ids)
         if extra_filters:
             for k, v in extra_filters.items():
-                body[k] = v
+                filters[k] = v
+
+        body: dict[str, Any] = {
+            "export": {"type": type, "columns": list(columns)},
+            "filters": filters,
+            # Duplicate the filter fields at top level — required by the API.
+            "from": from_dmy,
+            "to": to_dmy,
+            "timespan": timespan,
+            "grouping": {"primary": "no_group"},
+            "page": 1,
+            "per_page": 20,
+            "rounding": {"type": "no_rounding", "precision": 5},
+        }
+        if project_hash_ids:
+            body["project_hash_ids"] = project_hash_ids
+
         return self._download(
             "POST", "/reports/detailed/export", json=body, default_name=f"timenotes-report.{type}",
         )
+
+    def _uuids_to_project_hash_ids(self, project_ids: list[str]) -> list[str]:
+        """Resolve UUID project ids into hash_ids via the v2 listing.
+
+        Pass-through for entries that already look like a hash_id (12 chars,
+        non-UUID), so callers can mix the two if they want.
+        """
+        wanted = set(project_ids)
+        v2 = self._request("GET", "/projects", params={"per_page": 1000}, base_url=V2_BASE_URL)
+        out: list[str] = []
+        seen: set[str] = set()
+        for p in v2.get("projects", []) if isinstance(v2, Mapping) else []:
+            if not isinstance(p, Mapping):
+                continue
+            uuid = p.get("id")
+            hash_id = p.get("hash_id")
+            if uuid in wanted and isinstance(hash_id, str) and hash_id not in seen:
+                out.append(hash_id); seen.add(hash_id)
+        # Pass-through anything that didn't match — likely already hash_ids.
+        for pid in project_ids:
+            if pid not in {p.get("id") for p in (v2 or {}).get("projects", []) if isinstance(p, Mapping)} and pid not in seen:
+                out.append(pid); seen.add(pid)
+        return out
 
     def _download(
         self,
@@ -699,6 +785,19 @@ class TimenotesClient:
 
 def _drop_none(m: Mapping[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in m.items() if v is not None}
+
+
+def _to_dmy(date_str: str) -> str:
+    """Convert ``YYYY-MM-DD`` into ``DD/MM/YYYY`` (the format the export uses).
+
+    Pass-through if the string is already in DD/MM/YYYY form.
+    """
+    if not isinstance(date_str, str):
+        return date_str
+    if len(date_str) == 10 and date_str[4] == "-" and date_str[7] == "-":
+        y, m, d = date_str.split("-")
+        return f"{d}/{m}/{y}"
+    return date_str
 
 
 def _extract_filename(content_disposition: str, default: str) -> str:

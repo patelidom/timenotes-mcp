@@ -311,17 +311,25 @@ def timenotes_export_report_detailed(
     columns: list[str],
     type: str = "csv",
     output_dir: str = "/tmp",
+    project_ids: list[str] | None = None,
+    user_ids: list[str] | None = None,
+    client_ids: list[str] | None = None,
+    task_ids: list[str] | None = None,
+    tag_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Export the detailed report to a file (csv / xlsx / pdf).
 
-    ``columns`` must be non-empty — call ``timenotes_report_export_columns``
-    first to discover the names you can pick from. The file is written under
-    ``output_dir`` and the returned dict contains ``path``, ``size_bytes``,
-    and ``content_type``.
+    Filter the export by project / user / client / task / tag — all are
+    optional list-of-ids parameters. ``columns`` must be non-empty (call
+    ``timenotes_report_export_columns`` to discover the names). The file is
+    written under ``output_dir`` and the returned dict contains ``path``,
+    ``size_bytes``, ``content_type``, and ``filename``.
     """
     _require_auth()
     download = _client.export_report_detailed(
         from_date=from_date, to_date=to_date, columns=columns, type=type,
+        project_ids=project_ids, user_ids=user_ids, client_ids=client_ids,
+        task_ids=task_ids, tag_ids=tag_ids,
     )
     return _save_download(download, output_dir)
 
@@ -332,14 +340,20 @@ def timenotes_export_timesheet(
     to_date: str,
     type: str = "csv",
     output_dir: str = "/tmp",
+    project_ids: list[str] | None = None,
+    user_ids: list[str] | None = None,
+    client_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Export the timesheet grid to a file (csv / xlsx / pdf).
 
-    Writes under ``output_dir`` and returns ``path``, ``size_bytes``,
-    and ``content_type``.
+    Optional filters: ``project_ids``, ``user_ids``, ``client_ids``. The file
+    is written under ``output_dir``.
     """
     _require_auth()
-    download = _client.export_timesheet(from_date=from_date, to_date=to_date, type=type)
+    download = _client.export_timesheet(
+        from_date=from_date, to_date=to_date, type=type,
+        project_ids=project_ids, user_ids=user_ids, client_ids=client_ids,
+    )
     return _save_download(download, output_dir)
 
 
