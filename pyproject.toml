@@ -1,0 +1,42 @@
+[project]
+name = "timenotes-mcp"
+version = "0.1.0"
+description = "Model Context Protocol server wrapping the Timenotes.io time-tracking API for LLM agents (Claude, Hermes, etc)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Dominik Pateliotis" }
+]
+keywords = ["mcp", "model-context-protocol", "timenotes", "time-tracking", "llm", "agent", "claude", "hermes"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Office/Business :: Scheduling",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+  "mcp>=1.2.0",
+  "httpx>=0.27.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/patelidom/timenotes-mcp"
+Repository = "https://github.com/patelidom/timenotes-mcp"
+Issues = "https://github.com/patelidom/timenotes-mcp/issues"
+
+[project.scripts]
+timenotes-mcp = "timenotes_mcp.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["timenotes_mcp"]
