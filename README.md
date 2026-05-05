@@ -39,28 +39,29 @@ Requires Python ≥ 3.10.
 
 ## Credentials
 
-### Option A — `.secrets` file (recommended for local dev)
+The server has **two ways** to obtain Timenotes credentials, depending on how
+you're running it:
 
-```bash
-cp .secrets.example .secrets
-# edit .secrets and set TIMENOTES_EMAIL + TIMENOTES_PASSWORD
-chmod 600 .secrets
-```
+* **`http` transport (self-hosted, OAuth — recommended)**
+  No local config needed. The first time you connect from Claude.ai, the
+  server's login page opens, you sign in with your Timenotes email and
+  password, and the resulting session token is stored encrypted in a
+  Docker volume. See [Claude.ai (web) — self-hosted remote connector](#claudeai-web--self-hosted-remote-connector).
 
-The server reads it automatically at startup. The file is gitignored.
-
-### Option B — environment variables
-
-Set in the MCP client config that launches the server:
+* **`stdio` transport (local Claude Desktop / Code / Hermes)**
+  Pass credentials as environment variables in the MCP client config that
+  launches the server (see snippets below). The server has no file-based
+  credential storage.
 
 | Variable | Purpose |
 | --- | --- |
-| `TIMENOTES_EMAIL` + `TIMENOTES_PASSWORD` | Auto-login at startup |
-| `TIMENOTES_TOKEN` | Pre-obtained access token (skips login) |
+| `TIMENOTES_EMAIL` + `TIMENOTES_PASSWORD` | Auto-login at startup (stdio) |
+| `TIMENOTES_TOKEN` | Pre-obtained access token (stdio, skips login) |
 | `TIMENOTES_ACCOUNT_ID` | Pre-select a workspace (default: first) |
 | `TIMENOTES_BASE_URL` | Override the API base (default `https://api.timenotes.io/v1`) |
 
-If none are set, call the `timenotes_login` tool as the first action.
+If none are set in `stdio` mode, call the `timenotes_login` tool as the
+first action.
 
 ## Wiring the server into a client
 
@@ -73,7 +74,11 @@ If none are set, call the `timenotes_login` tool as the first action.
 {
   "mcpServers": {
     "timenotes": {
-      "command": "/absolute/path/to/timenotes-mcp/.venv/bin/timenotes-mcp"
+      "command": "/absolute/path/to/timenotes-mcp/.venv/bin/timenotes-mcp",
+      "env": {
+        "TIMENOTES_EMAIL": "you@example.com",
+        "TIMENOTES_PASSWORD": "..."
+      }
     }
   }
 }
@@ -84,7 +89,10 @@ Restart Claude Desktop afterwards.
 ### Claude Code
 
 ```bash
-claude mcp add timenotes -- /absolute/path/to/timenotes-mcp/.venv/bin/timenotes-mcp
+claude mcp add timenotes \
+  --env TIMENOTES_EMAIL=you@example.com \
+  --env TIMENOTES_PASSWORD=... \
+  -- /absolute/path/to/timenotes-mcp/.venv/bin/timenotes-mcp
 ```
 
 ### Hermes Agent
@@ -95,6 +103,9 @@ claude mcp add timenotes -- /absolute/path/to/timenotes-mcp/.venv/bin/timenotes-
 mcp_servers:
   timenotes:
     command: "/absolute/path/to/timenotes-mcp/.venv/bin/timenotes-mcp"
+    env:
+      TIMENOTES_EMAIL: "you@example.com"
+      TIMENOTES_PASSWORD: "..."
 ```
 
 Then `hermes chat`.
@@ -165,17 +176,30 @@ curl https://timenotes-mcp.your-domain.example/.well-known/oauth-authorization-s
 ```
 
 The repo also ships [`oauth_test.py`](oauth_test.py) which spawns the server
-locally and runs the entire OAuth + MCP handshake using your real Timenotes
-credentials from `.secrets`.
+locally and runs the entire OAuth + MCP handshake using credentials from
+the `TIMENOTES_EMAIL` / `TIMENOTES_PASSWORD` env vars.
 
 ## Verifying it works
 
+The test scripts read your Timenotes credentials from `TIMENOTES_EMAIL` and
+`TIMENOTES_PASSWORD` env vars. The cleanest pattern (no shell history of the
+password):
+
 ```bash
+read -p   "Email: "    TIMENOTES_EMAIL
+read -s -p "Password: " TIMENOTES_PASSWORD; echo
+export TIMENOTES_EMAIL TIMENOTES_PASSWORD
+
 # Exercises every tool against the real API; cleans up after itself.
 .venv/bin/python integration_test.py
 
 # Real JSON-RPC handshake over stdio (the same wire protocol agents use).
 .venv/bin/python stdio_test.py
+
+# End-to-end OAuth + remote MCP handshake (spawns the http server locally).
+.venv/bin/python oauth_test.py
+
+unset TIMENOTES_PASSWORD
 ```
 
 The integration test creates and immediately deletes its own client, project,

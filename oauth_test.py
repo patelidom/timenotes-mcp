@@ -27,7 +27,6 @@ from pathlib import Path
 import httpx
 import uvicorn
 
-from timenotes_mcp._secrets import load_secrets
 from timenotes_mcp.http_app import build_app
 from timenotes_mcp.oauth import OAuthStore, load_or_create_encryption_key
 
@@ -43,7 +42,6 @@ def _b64url(data: bytes) -> str:
 
 
 def main() -> None:
-    load_secrets()
     email = os.environ["TIMENOTES_EMAIL"]
     password = os.environ["TIMENOTES_PASSWORD"]
 

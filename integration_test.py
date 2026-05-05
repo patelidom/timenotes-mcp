@@ -16,7 +16,6 @@ import os
 import sys
 from typing import Any
 
-from timenotes_mcp._secrets import load_secrets
 from timenotes_mcp.client import TimenotesClient, TimenotesError
 
 
@@ -119,7 +118,6 @@ def _final_cleanup() -> None:
 
 def run() -> None:
     global CLIENT
-    load_secrets()
     CLIENT = TimenotesClient()
     CLIENT.login(os.environ["TIMENOTES_EMAIL"], os.environ["TIMENOTES_PASSWORD"])
     atexit.register(_final_cleanup)

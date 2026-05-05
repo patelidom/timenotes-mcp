@@ -19,13 +19,10 @@ import os
 import sys
 from pathlib import Path
 
-from ._secrets import load_secrets
 from .server import auto_login_from_env, mcp
 
 
 def main(argv: list[str] | None = None) -> None:
-    load_secrets()
-
     parser = argparse.ArgumentParser(prog="timenotes-mcp")
     parser.add_argument(
         "--transport",
