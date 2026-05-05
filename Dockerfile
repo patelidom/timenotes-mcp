@@ -23,15 +23,15 @@ RUN uv pip install --system --no-cache ".[http]"
 ENV TIMENOTES_MCP_STATE_DIR=/data \
     TIMENOTES_MCP_TRANSPORT=http \
     TIMENOTES_MCP_HOST=0.0.0.0 \
-    TIMENOTES_MCP_PORT=8000
+    TIMENOTES_MCP_PORT=8765
 
 VOLUME ["/data"]
-EXPOSE 8000
+EXPOSE 8765
 
 # Healthcheck — useful for Portainer's status indicator.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request,sys; \
-        urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)" \
+        urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=3)" \
         || exit 1
 
 ENTRYPOINT ["timenotes-mcp"]

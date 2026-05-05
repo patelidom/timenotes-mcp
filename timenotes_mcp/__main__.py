@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("TIMENOTES_MCP_PORT", "8000")),
+        default=int(os.getenv("TIMENOTES_MCP_PORT", "8765")),
     )
     parser.add_argument(
         "--public-url",

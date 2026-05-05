@@ -136,7 +136,7 @@ services:
     volumes:
       - timenotes-mcp-data:/data
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8765:8765"
 volumes:
   timenotes-mcp-data:
 ```
@@ -153,7 +153,7 @@ so the encrypted DB survives volume rebuilds.
 * Apache & nginx settings → enable **HTTP/2 + nginx as reverse proxy**
 * SSL/TLS Certificates → Let's Encrypt → enable
 * Hosting Settings → uncheck *Apache + Nginx* if you want pure nginx;
-  add a *Reverse Proxy* entry pointing to ``http://127.0.0.1:8000``
+  add a *Reverse Proxy* entry pointing to ``http://127.0.0.1:8765``
 
 **3. Add the connector in Claude.ai:**
 

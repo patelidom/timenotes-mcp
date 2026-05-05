@@ -27,8 +27,8 @@ services:
 
     ports:
       # Bind on localhost only — Plesk's nginx will proxy to this port.
-      # Change "8000" if it clashes with anything else on the host.
-      - "127.0.0.1:8000:8000"
+      # Change the host-side port if 8765 clashes with anything else.
+      - "127.0.0.1:8765:8765"
 
 volumes:
   timenotes-mcp-data:
