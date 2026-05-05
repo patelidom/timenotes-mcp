@@ -99,6 +99,75 @@ mcp_servers:
 
 Then `hermes chat`.
 
+### Claude.ai (web) — self-hosted remote connector
+
+Claude.ai's web app supports custom MCP connectors over HTTPS with OAuth 2.0.
+This repo ships a Dockerised HTTP transport that:
+
+* runs the same 80 tools over Streamable HTTP at `/mcp`
+* exposes a minimal OAuth 2.0 authorization server (Dynamic Client Registration,
+  PKCE, authorization code flow)
+* the OAuth login form **is** the Timenotes login — no separate password.
+  Credentials are validated against `POST /sessions` on the Timenotes API,
+  the resulting session token is encrypted at rest with a Fernet key
+* survives container restarts via a SQLite + key file in a Docker volume
+
+**1. Deploy with Docker Compose (Portainer Stack via git):**
+
+```yaml
+# docker-compose.yml — already in this repo
+services:
+  timenotes-mcp:
+    build: .
+    restart: unless-stopped
+    environment:
+      TIMENOTES_MCP_PUBLIC_URL: "https://timenotes-mcp.your-domain.example"
+    volumes:
+      - timenotes-mcp-data:/data
+    ports:
+      - "127.0.0.1:8000:8000"
+volumes:
+  timenotes-mcp-data:
+```
+
+In Portainer: *Stacks → Add stack → Repository*, point at this repo, set the
+``TIMENOTES_MCP_PUBLIC_URL`` env var to your subdomain. Optional but
+recommended: set ``TIMENOTES_OAUTH_SECRET`` to a fixed Fernet key (generate
+with ``python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'``)
+so the encrypted DB survives volume rebuilds.
+
+**2. Set up a subdomain in Plesk:**
+
+* Domains → Add subdomain (e.g. ``timenotes-mcp.your-domain.example``)
+* Apache & nginx settings → enable **HTTP/2 + nginx as reverse proxy**
+* SSL/TLS Certificates → Let's Encrypt → enable
+* Hosting Settings → uncheck *Apache + Nginx* if you want pure nginx;
+  add a *Reverse Proxy* entry pointing to ``http://127.0.0.1:8000``
+
+**3. Add the connector in Claude.ai:**
+
+Claude.ai → Settings → Connectors → Add custom connector → paste:
+
+```
+https://timenotes-mcp.your-domain.example/mcp
+```
+
+Claude redirects you to the login form; sign in with your Timenotes email
+and password; control returns to Claude.ai which now has tool access. The
+OAuth token is stored by Claude.ai per device, so the same connector works
+on web, mobile, and desktop.
+
+**Verify the deployment from a shell:**
+
+```bash
+curl https://timenotes-mcp.your-domain.example/healthz
+curl https://timenotes-mcp.your-domain.example/.well-known/oauth-authorization-server
+```
+
+The repo also ships [`oauth_test.py`](oauth_test.py) which spawns the server
+locally and runs the entire OAuth + MCP handshake using your real Timenotes
+credentials from `.secrets`.
+
 ## Verifying it works
 
 ```bash

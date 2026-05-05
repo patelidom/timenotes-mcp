@@ -49,6 +49,31 @@ def auto_login_from_env() -> None:
             pass
 
 
+def set_session(*, access_token: str, account_id: str | None = None,
+                user: dict[str, Any] | None = None) -> None:
+    """Install a Timenotes session token (e.g. recovered from the OAuth store).
+
+    Used by the HTTP transport — after a user has authenticated via the OAuth
+    login form, the saved Timenotes session token is pushed into the shared
+    client so subsequent tool calls go out with the right Authorization headers.
+    """
+    _client.access_token = access_token
+    if account_id is not None:
+        _client.account_id = str(account_id)
+    if user is not None:
+        _client.user = dict(user)
+
+
+def clear_session() -> None:
+    _client.access_token = None
+    _client.account_id = None
+    _client.user = None
+
+
+def get_client() -> TimenotesClient:
+    return _client
+
+
 # --- session ---------------------------------------------------------------
 
 @mcp.tool()

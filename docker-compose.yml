@@ -1,0 +1,34 @@
+services:
+  timenotes-mcp:
+    # Build from this repo. In Portainer Stacks (git deploy mode) this is fine.
+    # If you'd rather pull a prebuilt image, replace `build:` with `image: ...`.
+    build:
+      context: .
+    container_name: timenotes-mcp
+    restart: unless-stopped
+
+    environment:
+      # Public URL where Plesk reverse-proxies to this container.
+      # MUST be set; OAuth metadata advertises this.
+      TIMENOTES_MCP_PUBLIC_URL: "${TIMENOTES_MCP_PUBLIC_URL:?set TIMENOTES_MCP_PUBLIC_URL}"
+
+      # Optional: pre-set a Fernet key so the SQLite DB is portable across
+      # rebuilds. If unset, a key is generated on first start and saved into
+      # /data/secret.key (still inside the volume — fine for single-node).
+      #
+      # Generate one with:
+      #   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+      TIMENOTES_OAUTH_SECRET: "${TIMENOTES_OAUTH_SECRET:-}"
+
+      TIMENOTES_MCP_LOG_LEVEL: "${TIMENOTES_MCP_LOG_LEVEL:-INFO}"
+
+    volumes:
+      - timenotes-mcp-data:/data
+
+    ports:
+      # Bind on localhost only — Plesk's nginx will proxy to this port.
+      # Change "8000" if it clashes with anything else on the host.
+      - "127.0.0.1:8000:8000"
+
+volumes:
+  timenotes-mcp-data:
