@@ -411,6 +411,33 @@ def build_app(*, public_url: str, state_dir: Path, store: OAuthStore) -> Starlet
     mcp.settings.streamable_http_path = "/"
     mcp.settings.json_response = False
     mcp.settings.stateless_http = True
+
+    # MCP SDK's anti-DNS-rebinding middleware checks Host + Origin headers.
+    # Without this, every request from the public hostname returns 421
+    # "Invalid Host header". Add the public host (and a few sensible
+    # localhost defaults so the docker healthcheck still works) to the
+    # allowlist; the Origin allowlist covers Claude's frontend.
+    from urllib.parse import urlsplit
+
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    parsed = urlsplit(cfg.public_url)
+    public_host = parsed.netloc
+    public_origin = f"{parsed.scheme}://{parsed.netloc}"
+
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[
+            public_host,
+            "127.0.0.1:*", "localhost:*", "[::1]:*",
+        ],
+        allowed_origins=[
+            public_origin,
+            "https://claude.ai",
+            "http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*",
+        ],
+    )
+
     mcp_app = mcp.streamable_http_app()
 
     # Forward the mcp app's lifespan into ours, otherwise the MCP session
