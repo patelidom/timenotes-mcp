@@ -29,6 +29,7 @@ from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
@@ -117,6 +118,14 @@ async def _well_known_auth_server(request: Request) -> Response:
 
 
 async def _well_known_protected_resource(request: Request) -> Response:
+    """RFC 9728 Protected Resource Metadata.
+
+    Served at both ``/.well-known/oauth-protected-resource`` (root) and
+    ``/.well-known/oauth-protected-resource/mcp`` (path-suffixed for the
+    actual ``/mcp`` resource). Claude.ai checks the path-suffixed location
+    first and falls back to root — but if the path-suffixed one 404s, the
+    full code-exchange handshake silently drops.
+    """
     cfg: HttpConfig = request.app.state.cfg
     return JSONResponse({
         "resource": cfg.resource_url(),
@@ -354,13 +363,14 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
 
 def _challenge(cfg: HttpConfig) -> Response:
+    # RFC 9728 §5.1: the resource_metadata URL should be path-specific.
     return JSONResponse(
         {"error": "invalid_token"},
         status_code=401,
         headers={
             "WWW-Authenticate": (
                 f'Bearer realm="timenotes-mcp", '
-                f'resource_metadata="{cfg.public_url}/.well-known/oauth-protected-resource"'
+                f'resource_metadata="{cfg.public_url}/.well-known/oauth-protected-resource/mcp"'
             ),
         },
     )
@@ -418,6 +428,10 @@ def build_app(*, public_url: str, state_dir: Path, store: OAuthStore) -> Starlet
         Route("/healthz", _health, methods=["GET"]),
         Route("/.well-known/oauth-authorization-server", _well_known_auth_server, methods=["GET"]),
         Route("/.well-known/oauth-protected-resource", _well_known_protected_resource, methods=["GET"]),
+        # RFC 9728 path-suffixed metadata for the /mcp resource. Claude.ai
+        # checks this exact URL first and silently aborts the OAuth handshake
+        # if it's missing.
+        Route("/.well-known/oauth-protected-resource/mcp", _well_known_protected_resource, methods=["GET"]),
         Route("/register", _register, methods=["POST"]),
         Route("/authorize", _authorize_get, methods=["GET"]),
         Route("/authorize", _authorize_post, methods=["POST"]),
@@ -427,7 +441,19 @@ def build_app(*, public_url: str, state_dir: Path, store: OAuthStore) -> Starlet
 
     app = Starlette(
         routes=routes,
-        middleware=[Middleware(BearerAuthMiddleware)],
+        middleware=[
+            # CORS for Claude.ai's frontend that talks to /mcp directly.
+            Middleware(
+                CORSMiddleware,
+                allow_origins=["https://claude.ai", "https://*.claude.ai"],
+                allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)*claude\.ai",
+                allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+                allow_headers=["Authorization", "Content-Type", "Accept", "Mcp-Session-Id"],
+                expose_headers=["Mcp-Session-Id", "WWW-Authenticate"],
+                allow_credentials=False,
+            ),
+            Middleware(BearerAuthMiddleware),
+        ],
         lifespan=lifespan,
     )
     app.state.cfg = cfg
