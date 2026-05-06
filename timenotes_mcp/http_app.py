@@ -408,9 +408,11 @@ def build_app(*, public_url: str, state_dir: Path, store: OAuthStore) -> Starlet
         log.info("Restored Timenotes session for %s", saved.get("email"))
 
     # FastMCP gives us a Streamable HTTP ASGI app. We mount it under /mcp.
+    # Stateful sessions (stateless_http=False) are required by Claude.ai —
+    # in stateless mode tools/list comes back empty for it.
     mcp.settings.streamable_http_path = "/"
     mcp.settings.json_response = False
-    mcp.settings.stateless_http = True
+    mcp.settings.stateless_http = False
 
     # MCP SDK's anti-DNS-rebinding middleware checks Host + Origin headers.
     # Without this, every request from the public hostname returns 421
