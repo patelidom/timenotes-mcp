@@ -24,7 +24,12 @@ class TimenotesError(RuntimeError):
     """Raised when the Timenotes API returns a non-2xx response."""
 
     def __init__(self, status: int, body: Any):
-        super().__init__(f"Timenotes API error {status}: {body!r}")
+        # The API returns 401 with an EMPTY body for a bad/expired token —
+        # spell out what that means so callers (and AI models) don't see just "''".
+        hint = ""
+        if status == 401 and not body:
+            hint = " (Timenotes token is invalid or expired — log in again)"
+        super().__init__(f"Timenotes API error {status}: {body!r}{hint}")
         self.status = status
         self.body = body
 
@@ -38,6 +43,13 @@ class TimenotesClient:
         timeout: float = 30.0,
     ):
         self.base_url = base_url.rstrip("/")
+        # Derive the v2 base from the (possibly overridden) v1 base so that
+        # TIMENOTES_BASE_URL redirects BOTH API versions, not just v1.
+        self.v2_base_url = (
+            self.base_url[: -len("/v1")] + "/v2"
+            if self.base_url.endswith("/v1")
+            else V2_BASE_URL
+        )
         self.access_token = access_token
         self.account_id = account_id
         self.user: dict[str, Any] | None = None
@@ -167,16 +179,16 @@ class TimenotesClient:
             "GET",
             f"/projects/{project_id}/tasks",
             params={"per_page": 1000},
-            base_url=V2_BASE_URL,
+            base_url=self.v2_base_url,
         )
 
     def list_tags(self) -> Any:
-        return self._request("GET", "/tags", params={"per_page": 1000}, base_url=V2_BASE_URL)
+        return self._request("GET", "/tags", params={"per_page": 1000}, base_url=self.v2_base_url)
 
     # --- clients (v2) ----------------------------------------------------
 
     def list_clients(self) -> Any:
-        return self._request("GET", "/clients", params={"per_page": 1000}, base_url=V2_BASE_URL)
+        return self._request("GET", "/clients", params={"per_page": 1000}, base_url=self.v2_base_url)
 
     def get_client(self, client_id: str | int) -> Any:
         """Read a single client.
@@ -191,15 +203,15 @@ class TimenotesClient:
         return {}
 
     def create_client(self, client: Mapping[str, Any]) -> Any:
-        return self._request("POST", "/clients", json={"client": dict(client)}, base_url=V2_BASE_URL)
+        return self._request("POST", "/clients", json={"client": dict(client)}, base_url=self.v2_base_url)
 
     def update_client(self, client_id: str | int, client: Mapping[str, Any]) -> Any:
         return self._request(
-            "PATCH", f"/clients/{client_id}", json={"client": dict(client)}, base_url=V2_BASE_URL
+            "PATCH", f"/clients/{client_id}", json={"client": dict(client)}, base_url=self.v2_base_url
         )
 
     def delete_client(self, client_id: str | int) -> Any:
-        return self._request("DELETE", f"/clients/{client_id}", base_url=V2_BASE_URL)
+        return self._request("DELETE", f"/clients/{client_id}", base_url=self.v2_base_url)
 
     # --- members ---------------------------------------------------------
 
@@ -210,193 +222,193 @@ class TimenotesClient:
     # --- projects (single + CRUD on v2) ----------------------------------
 
     def get_project(self, project_id: str | int) -> Any:
-        return self._request("GET", f"/projects/{project_id}", base_url=V2_BASE_URL)
+        return self._request("GET", f"/projects/{project_id}", base_url=self.v2_base_url)
 
     def create_project(self, project: Mapping[str, Any]) -> Any:
         return self._request(
-            "POST", "/projects", json={"project": dict(project)}, base_url=V2_BASE_URL
+            "POST", "/projects", json={"project": dict(project)}, base_url=self.v2_base_url
         )
 
     def update_project(self, project_id: str | int, project: Mapping[str, Any]) -> Any:
         return self._request(
             "PATCH", f"/projects/{project_id}",
-            json={"project": dict(project)}, base_url=V2_BASE_URL,
+            json={"project": dict(project)}, base_url=self.v2_base_url,
         )
 
     def delete_project(self, project_id: str | int) -> Any:
-        return self._request("DELETE", f"/projects/{project_id}", base_url=V2_BASE_URL)
+        return self._request("DELETE", f"/projects/{project_id}", base_url=self.v2_base_url)
 
     # --- tasks (CRUD on v2) ----------------------------------------------
 
     def get_task(self, project_id: str | int, task_id: str | int) -> Any:
         return self._request(
-            "GET", f"/projects/{project_id}/tasks/{task_id}", base_url=V2_BASE_URL
+            "GET", f"/projects/{project_id}/tasks/{task_id}", base_url=self.v2_base_url
         )
 
     def create_task(self, project_id: str | int, task: Mapping[str, Any]) -> Any:
         return self._request(
             "POST", f"/projects/{project_id}/tasks",
-            json={"task": dict(task)}, base_url=V2_BASE_URL,
+            json={"task": dict(task)}, base_url=self.v2_base_url,
         )
 
     def update_task(self, project_id: str | int, task_id: str | int, task: Mapping[str, Any]) -> Any:
         return self._request(
             "PATCH", f"/projects/{project_id}/tasks/{task_id}",
-            json={"task": dict(task)}, base_url=V2_BASE_URL,
+            json={"task": dict(task)}, base_url=self.v2_base_url,
         )
 
     def delete_task(self, project_id: str | int, task_id: str | int) -> Any:
         return self._request(
-            "DELETE", f"/projects/{project_id}/tasks/{task_id}", base_url=V2_BASE_URL
+            "DELETE", f"/projects/{project_id}/tasks/{task_id}", base_url=self.v2_base_url
         )
 
     def bookmark_task(self, project_id: str | int, task_id: str | int) -> Any:
         return self._request(
-            "PATCH", f"/projects/{project_id}/tasks/{task_id}/bookmark", base_url=V2_BASE_URL
+            "PATCH", f"/projects/{project_id}/tasks/{task_id}/bookmark", base_url=self.v2_base_url
         )
 
     def unbookmark_task(self, project_id: str | int, task_id: str | int) -> Any:
         return self._request(
-            "PATCH", f"/projects/{project_id}/tasks/{task_id}/unbookmark", base_url=V2_BASE_URL
+            "PATCH", f"/projects/{project_id}/tasks/{task_id}/unbookmark", base_url=self.v2_base_url
         )
 
     # --- tags (CRUD) -----------------------------------------------------
 
     def create_tag(self, tag: Mapping[str, Any]) -> Any:
-        return self._request("POST", "/tags", json={"tag": dict(tag)}, base_url=V2_BASE_URL)
+        return self._request("POST", "/tags", json={"tag": dict(tag)}, base_url=self.v2_base_url)
 
     def update_tag(self, tag_id: str | int, tag: Mapping[str, Any]) -> Any:
-        return self._request("PATCH", f"/tags/{tag_id}", json={"tag": dict(tag)}, base_url=V2_BASE_URL)
+        return self._request("PATCH", f"/tags/{tag_id}", json={"tag": dict(tag)}, base_url=self.v2_base_url)
 
     def delete_tag(self, tag_id: str | int) -> Any:
-        return self._request("DELETE", f"/tags/{tag_id}", base_url=V2_BASE_URL)
+        return self._request("DELETE", f"/tags/{tag_id}", base_url=self.v2_base_url)
 
     # --- accounts (v2 alternative) ---------------------------------------
 
     def list_accounts_v2(self) -> Any:
-        return self._request("GET", "/accounts", params={"per_page": 1000}, base_url=V2_BASE_URL)
+        return self._request("GET", "/accounts", params={"per_page": 1000}, base_url=self.v2_base_url)
 
     def current_account_v2(self) -> Any:
-        return self._request("GET", "/accounts/current", base_url=V2_BASE_URL)
+        return self._request("GET", "/accounts/current", base_url=self.v2_base_url)
 
     def list_owned_accounts(self) -> Any:
-        return self._request("GET", "/users_accounts/owned", base_url=V2_BASE_URL)
+        return self._request("GET", "/users_accounts/owned", base_url=self.v2_base_url)
 
     def list_scoped_accounts(self) -> Any:
-        return self._request("GET", "/users_accounts/scoped", base_url=V2_BASE_URL)
+        return self._request("GET", "/users_accounts/scoped", base_url=self.v2_base_url)
 
     # --- alerts ----------------------------------------------------------
 
     def list_alerts(self) -> Any:
-        return self._request("GET", "/alerts", base_url=V2_BASE_URL)
+        return self._request("GET", "/alerts", base_url=self.v2_base_url)
 
     def update_alert(self, alert_id: str | int, body: Mapping[str, Any]) -> Any:
-        return self._request("PATCH", f"/alerts/{alert_id}", json=dict(body), base_url=V2_BASE_URL)
+        return self._request("PATCH", f"/alerts/{alert_id}", json=dict(body), base_url=self.v2_base_url)
 
     # --- activities / dashboard ------------------------------------------
 
     def get_dashboard(self) -> Any:
-        return self._request("GET", "/activities/dashboard", base_url=V2_BASE_URL)
+        return self._request("GET", "/activities/dashboard", base_url=self.v2_base_url)
 
     # --- holidays / absences ---------------------------------------------
 
     def list_absence_requests(self, params: Mapping[str, Any] | None = None) -> Any:
         return self._request(
             "GET", "/holidays/absence_requests",
-            params=dict(params or {"per_page": 100}), base_url=V2_BASE_URL,
+            params=dict(params or {"per_page": 100}), base_url=self.v2_base_url,
         )
 
     def create_absence_request(self, body: Mapping[str, Any]) -> Any:
         return self._request(
             "POST", "/holidays/absence_requests",
-            json={"absence_request": dict(body)}, base_url=V2_BASE_URL,
+            json={"absence_request": dict(body)}, base_url=self.v2_base_url,
         )
 
     def update_absence_request(self, request_id: str | int, body: Mapping[str, Any]) -> Any:
         return self._request(
             "PATCH", f"/holidays/absence_requests/{request_id}",
-            json={"absence_request": dict(body)}, base_url=V2_BASE_URL,
+            json={"absence_request": dict(body)}, base_url=self.v2_base_url,
         )
 
     def delete_absence_request(self, request_id: str | int) -> Any:
         return self._request(
-            "DELETE", f"/holidays/absence_requests/{request_id}", base_url=V2_BASE_URL
+            "DELETE", f"/holidays/absence_requests/{request_id}", base_url=self.v2_base_url
         )
 
     def approve_absence_request(self, request_id: str | int) -> Any:
         return self._request(
-            "PATCH", f"/holidays/absence_requests/{request_id}/approve", base_url=V2_BASE_URL
+            "PATCH", f"/holidays/absence_requests/{request_id}/approve", base_url=self.v2_base_url
         )
 
     def reject_absence_request(self, request_id: str | int) -> Any:
         return self._request(
-            "PATCH", f"/holidays/absence_requests/{request_id}/reject", base_url=V2_BASE_URL
+            "PATCH", f"/holidays/absence_requests/{request_id}/reject", base_url=self.v2_base_url
         )
 
     def list_absences(self, params: Mapping[str, Any] | None = None) -> Any:
         return self._request(
             "GET", "/holidays/absences",
-            params=dict(params or {"per_page": 100}), base_url=V2_BASE_URL,
+            params=dict(params or {"per_page": 100}), base_url=self.v2_base_url,
         )
 
     def list_absence_types(self) -> Any:
         return self._request(
-            "GET", "/holidays/absence_types", params={"per_page": 100}, base_url=V2_BASE_URL
+            "GET", "/holidays/absence_types", params={"per_page": 100}, base_url=self.v2_base_url
         )
 
     def list_free_days(self) -> Any:
         return self._request(
-            "GET", "/holidays/free_days", params={"per_page": 1000}, base_url=V2_BASE_URL
+            "GET", "/holidays/free_days", params={"per_page": 1000}, base_url=self.v2_base_url
         )
 
     # --- invitations -----------------------------------------------------
 
     def list_invitations(self) -> Any:
         return self._request(
-            "GET", "/invitations", params={"per_page": 100}, base_url=V2_BASE_URL
+            "GET", "/invitations", params={"per_page": 100}, base_url=self.v2_base_url
         )
 
     def create_invitation(self, body: Mapping[str, Any]) -> Any:
         return self._request(
-            "POST", "/invitations", json={"invitation": dict(body)}, base_url=V2_BASE_URL
+            "POST", "/invitations", json={"invitation": dict(body)}, base_url=self.v2_base_url
         )
 
     def bulk_create_invitations(self, body: Mapping[str, Any]) -> Any:
         return self._request(
-            "POST", "/invitations/bulk_create", json=dict(body), base_url=V2_BASE_URL
+            "POST", "/invitations/bulk_create", json=dict(body), base_url=self.v2_base_url
         )
 
     def delete_invitation(self, invitation_id: str | int) -> Any:
         return self._request(
-            "DELETE", f"/invitations/{invitation_id}", base_url=V2_BASE_URL
+            "DELETE", f"/invitations/{invitation_id}", base_url=self.v2_base_url
         )
 
     def resend_invitation(self, invitation_id: str | int) -> Any:
         return self._request(
-            "POST", f"/invitations/{invitation_id}/resend", base_url=V2_BASE_URL
+            "POST", f"/invitations/{invitation_id}/resend", base_url=self.v2_base_url
         )
 
     # --- members groups --------------------------------------------------
 
     def list_members_groups(self) -> Any:
         return self._request(
-            "GET", "/members_groups", params={"per_page": 100}, base_url=V2_BASE_URL
+            "GET", "/members_groups", params={"per_page": 100}, base_url=self.v2_base_url
         )
 
     def create_members_group(self, body: Mapping[str, Any]) -> Any:
         return self._request(
-            "POST", "/members_groups", json={"members_group": dict(body)}, base_url=V2_BASE_URL
+            "POST", "/members_groups", json={"members_group": dict(body)}, base_url=self.v2_base_url
         )
 
     def update_members_group(self, group_id: str | int, body: Mapping[str, Any]) -> Any:
         return self._request(
             "PATCH", f"/members_groups/{group_id}",
-            json={"members_group": dict(body)}, base_url=V2_BASE_URL,
+            json={"members_group": dict(body)}, base_url=self.v2_base_url,
         )
 
     def delete_members_group(self, group_id: str | int) -> Any:
         return self._request(
-            "DELETE", f"/members_groups/{group_id}", base_url=V2_BASE_URL
+            "DELETE", f"/members_groups/{group_id}", base_url=self.v2_base_url
         )
 
     # --- integrations ----------------------------------------------------
@@ -406,39 +418,39 @@ class TimenotesClient:
 
     def list_available_integrations(self) -> Any:
         return self._request(
-            "GET", "/integrations/available", params={"per_page": 100}, base_url=V2_BASE_URL
+            "GET", "/integrations/available", params={"per_page": 100}, base_url=self.v2_base_url
         )
 
     def list_integration_accounts(self) -> Any:
         return self._request(
-            "GET", "/integration_accounts", params={"per_page": 100}, base_url=V2_BASE_URL
+            "GET", "/integration_accounts", params={"per_page": 100}, base_url=self.v2_base_url
         )
 
     # --- settings --------------------------------------------------------
 
     def get_setting(self) -> Any:
-        return self._request("GET", "/setting", base_url=V2_BASE_URL)
+        return self._request("GET", "/setting", base_url=self.v2_base_url)
 
     def update_setting(self, body: Mapping[str, Any]) -> Any:
-        return self._request("PATCH", "/setting", json={"setting": dict(body)}, base_url=V2_BASE_URL)
+        return self._request("PATCH", "/setting", json={"setting": dict(body)}, base_url=self.v2_base_url)
 
     # --- plans / subscription --------------------------------------------
 
     def list_plans(self) -> Any:
-        return self._request("GET", "/plans", params={"per_page": 100}, base_url=V2_BASE_URL)
+        return self._request("GET", "/plans", params={"per_page": 100}, base_url=self.v2_base_url)
 
     def current_subscription_period(self) -> Any:
-        return self._request("GET", "/subscription_periods/current", base_url=V2_BASE_URL)
+        return self._request("GET", "/subscription_periods/current", base_url=self.v2_base_url)
 
     def list_subscription_periods(self) -> Any:
         return self._request(
-            "GET", "/subscription_periods", params={"per_page": 100}, base_url=V2_BASE_URL
+            "GET", "/subscription_periods", params={"per_page": 100}, base_url=self.v2_base_url
         )
 
     # --- storage ---------------------------------------------------------
 
     def get_storage(self) -> Any:
-        return self._request("GET", "/storage", base_url=V2_BASE_URL)
+        return self._request("GET", "/storage", base_url=self.v2_base_url)
 
     # --- tracker live edit -----------------------------------------------
 
@@ -446,7 +458,7 @@ class TimenotesClient:
         """PATCH the running tracker (change project/task/description on the fly)."""
         return self._request(
             "PATCH", "/active_tracker",
-            json={"active_tracker": dict(tracker)}, base_url=V2_BASE_URL,
+            json={"active_tracker": dict(tracker)}, base_url=self.v2_base_url,
         )
 
     # --- active tracker --------------------------------------------------
@@ -470,12 +482,12 @@ class TimenotesClient:
             "POST",
             "/active_tracker",
             json={"active_tracker": dict(tracker)},
-            base_url=V2_BASE_URL,
+            base_url=self.v2_base_url,
         )
 
     def stop_tracker(self) -> Any:
         # DELETE works on either version; default to v2 for consistency.
-        return self._request("DELETE", "/active_tracker", base_url=V2_BASE_URL)
+        return self._request("DELETE", "/active_tracker", base_url=self.v2_base_url)
 
     # --- time logs -------------------------------------------------------
 
@@ -485,11 +497,12 @@ class TimenotesClient:
         from_date: str | None = None,
         to_date: str | None = None,
         per_page: int = 100,
+        page: int = 1,
     ) -> Any:
         return self._request(
             "GET",
             "/time_logs",
-            params={"from": from_date, "to": to_date, "per_page": per_page},
+            params={"from": from_date, "to": to_date, "per_page": per_page, "page": page},
         )
 
     def create_time_log(self, time_log: Mapping[str, Any]) -> Any:
@@ -510,14 +523,14 @@ class TimenotesClient:
     # --- reports (v2) ----------------------------------------------------
 
     def report_detailed(self, params: Mapping[str, Any] | None = None) -> Any:
-        return self._request("GET", "/reports/detailed", params=params or {}, base_url=V2_BASE_URL)
+        return self._request("GET", "/reports/detailed", params=params or {}, base_url=self.v2_base_url)
 
     def report_detailed_chart(self, params: Mapping[str, Any] | None = None) -> Any:
-        return self._request("GET", "/reports/detailed/chart", params=params or {}, base_url=V2_BASE_URL)
+        return self._request("GET", "/reports/detailed/chart", params=params or {}, base_url=self.v2_base_url)
 
     def report_export_columns(self, params: Mapping[str, Any] | None = None) -> Any:
         return self._request(
-            "GET", "/reports/detailed/export_columns", params=params or {}, base_url=V2_BASE_URL
+            "GET", "/reports/detailed/export_columns", params=params or {}, base_url=self.v2_base_url
         )
 
     # --- exports (binary file responses) ---------------------------------
@@ -643,7 +656,7 @@ class TimenotesClient:
         non-UUID), so callers can mix the two if they want.
         """
         wanted = set(project_ids)
-        v2 = self._request("GET", "/projects", params={"per_page": 1000}, base_url=V2_BASE_URL)
+        v2 = self._request("GET", "/projects", params={"per_page": 1000}, base_url=self.v2_base_url)
         out: list[str] = []
         seen: set[str] = set()
         for p in v2.get("projects", []) if isinstance(v2, Mapping) else []:
@@ -669,7 +682,7 @@ class TimenotesClient:
         default_name: str = "download.bin",
     ) -> dict[str, Any]:
         """Internal: do a request, but treat the body as raw bytes (file)."""
-        url = f"{V2_BASE_URL}{path}"
+        url = f"{self.v2_base_url}{path}"
         headers = {**self.headers, "Accept": "*/*"}
         resp = self._http.request(
             method, url,
@@ -693,10 +706,10 @@ class TimenotesClient:
     # --- timesheets (v2) -------------------------------------------------
 
     def get_timesheet(self, params: Mapping[str, Any] | None = None) -> Any:
-        return self._request("GET", "/timesheets", params=params or {}, base_url=V2_BASE_URL)
+        return self._request("GET", "/timesheets", params=params or {}, base_url=self.v2_base_url)
 
     def get_timesheet_cell(self, params: Mapping[str, Any] | None = None) -> Any:
-        return self._request("GET", "/timesheets/cell", params=params or {}, base_url=V2_BASE_URL)
+        return self._request("GET", "/timesheets/cell", params=params or {}, base_url=self.v2_base_url)
 
     # --- bulk time-log operations ---------------------------------------
 

@@ -11,6 +11,7 @@ or at runtime via the ``timenotes_login`` tool.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
@@ -18,7 +19,25 @@ from mcp.server.fastmcp import FastMCP
 
 from .client import DEFAULT_BASE_URL, TimenotesClient, TimenotesError
 
-mcp = FastMCP(name="timenotes")
+mcp = FastMCP(
+    name="timenotes",
+    instructions=(
+        "Timenotes.io time tracking. Conventions used by every tool:\n"
+        "- Dates are YYYY-MM-DD; times of day (start_at) are HH:MM; all durations are in MINUTES.\n"
+        "- IDs are UUID strings. Discover them via list tools: timenotes_list_projects, "
+        "timenotes_list_tasks(project_id), timenotes_list_clients, timenotes_list_tags, "
+        "timenotes_list_members.\n"
+        "- Typical flow to log time: list_projects -> list_tasks -> timenotes_create_time_log. "
+        "For live tracking use timenotes_start_tracker / timenotes_stop_tracker.\n"
+        "- Update tools take a `fields` object with the raw API fields to change "
+        "(e.g. {\"name\": ...}).\n"
+        "- Aggregations (timenotes_time_per_client/project/task/day) return minutes and hours, "
+        "sorted descending.\n"
+        "- If a call fails with 'Not authenticated', credentials are missing on the server side "
+        "(env vars or OAuth login) — tell the user; do not guess credentials.\n"
+        "- delete_* and bulk_* tools are destructive and irreversible; confirm with the user first."
+    ),
+)
 
 _client = TimenotesClient(
     base_url=os.getenv("TIMENOTES_BASE_URL", DEFAULT_BASE_URL),
@@ -44,9 +63,12 @@ def auto_login_from_env() -> None:
     if email and password:
         try:
             _client.login(email, password)
-        except TimenotesError:
-            # Surface at first tool call; don't crash the server on startup.
-            pass
+        except TimenotesError as exc:
+            # Don't crash the server on startup; the error would otherwise be
+            # masked by a generic "Not authenticated" at first tool call.
+            logging.getLogger("timenotes_mcp").warning(
+                "Auto-login from env failed: %s", exc
+            )
 
 
 def set_session(*, access_token: str, account_id: str | None = None,
@@ -84,13 +106,15 @@ def timenotes_login(email: str, password: str, account_id: str | None = None) ->
     variables at server startup. Use this tool only if env vars aren't set or
     you want to switch accounts mid-session.
     """
-    data = _client.login(email, password)
+    _client.login(email, password)
     if account_id:
         _client.set_account(account_id)
+    # Deliberately no raw payload here — it contains the session token, which
+    # must not leak into the model's context.
     return {
         "ok": True,
         "account_id": _client.account_id,
-        "raw": _safe(data),
+        "email": (_client.user or {}).get("email"),
     }
 
 
@@ -137,10 +161,42 @@ def timenotes_list_projects(include_archived: bool = True) -> Any:
 
 
 @mcp.tool()
-def timenotes_list_tasks(project_id: str) -> Any:
-    """List tasks for a given project."""
+def timenotes_list_tasks(
+    project_id: str,
+    search: str | None = None,
+    limit: int = 100,
+) -> Any:
+    """List tasks for a given project (projects can have hundreds).
+
+    ``search`` filters by case-insensitive substring of the task name — prefer
+    it over paging through everything. At most ``limit`` tasks are returned;
+    ``total`` in the response tells you how many matched.
+    """
     _require_auth()
-    return _safe(_client.list_tasks(project_id))
+    data = _client.list_tasks(project_id)
+    tasks = data.get("tasks", []) if isinstance(data, dict) else []
+    if search:
+        needle = search.lower()
+        tasks = [t for t in tasks if needle in (t.get("name") or "").lower()]
+    total = len(tasks)
+    out = {"total": total, "tasks": [_compact_task(t) for t in tasks[:limit]]}
+    if total > limit:
+        out["note"] = (
+            f"Showing {limit} of {total} tasks — narrow down with `search` "
+            "or raise `limit`."
+        )
+    return out
+
+
+def _compact_task(t: dict[str, Any]) -> dict[str, Any]:
+    """Drop null/empty noise fields so big task lists stay readable."""
+    keep = {"id": t.get("id"), "name": t.get("name"), "state": t.get("state")}
+    for k in ("description", "time_estimate_duration", "worktime", "billable_rate",
+              "is_billable", "bookmarked", "recently_tracked", "tags"):
+        v = t.get(k)
+        if v not in (None, [], False):
+            keep[k] = v
+    return keep
 
 
 @mcp.tool()
@@ -216,10 +272,16 @@ def timenotes_list_time_logs(
     from_date: str | None = None,
     to_date: str | None = None,
     per_page: int = 100,
+    page: int = 1,
 ) -> Any:
-    """List time logs. Dates are ISO 8601 (``YYYY-MM-DD``). Both ends optional."""
+    """List time logs. Dates are ISO 8601 (``YYYY-MM-DD``). Both ends optional.
+
+    Paginated — check ``meta.pagination.total_pages`` and pass ``page`` to
+    fetch the rest.
+    """
     _require_auth()
-    return _safe(_client.list_time_logs(from_date=from_date, to_date=to_date, per_page=per_page))
+    return _safe(_client.list_time_logs(
+        from_date=from_date, to_date=to_date, per_page=per_page, page=page))
 
 
 @mcp.tool()
@@ -512,16 +574,16 @@ def timenotes_get_client(client_id: str) -> Any:
 
 
 @mcp.tool()
-def timenotes_create_client(name: str, **fields: Any) -> Any:
-    """Create a new client. Pass any extra fields the API supports as kwargs."""
+def timenotes_create_client(name: str, fields: dict[str, Any] | None = None) -> Any:
+    """Create a new client. Extra API fields go in the optional ``fields`` object."""
     _require_auth()
-    body = {"name": name, **fields}
+    body = {"name": name, **(fields or {})}
     return _safe(_client.create_client(body))
 
 
 @mcp.tool()
-def timenotes_update_client(client_id: str, **fields: Any) -> Any:
-    """Patch fields on an existing client."""
+def timenotes_update_client(client_id: str, fields: dict[str, Any]) -> Any:
+    """Patch fields on an existing client. ``fields`` is an object of API fields to change."""
     _require_auth()
     if not fields:
         raise ValueError("Provide at least one field to update.")
@@ -546,18 +608,20 @@ def timenotes_get_project(project_id: str) -> Any:
 
 
 @mcp.tool()
-def timenotes_create_project(name: str, client_id: str | None = None, **fields: Any) -> Any:
+def timenotes_create_project(
+    name: str, client_id: str | None = None, fields: dict[str, Any] | None = None
+) -> Any:
     """Create a new project. Optionally attach to a client."""
     _require_auth()
-    body: dict[str, Any] = {"name": name, **fields}
+    body: dict[str, Any] = {"name": name, **(fields or {})}
     if client_id is not None:
         body["client_id"] = client_id
     return _safe(_client.create_project(body))
 
 
 @mcp.tool()
-def timenotes_update_project(project_id: str, **fields: Any) -> Any:
-    """Patch fields on a project (e.g. ``name``, ``client_id``, ``color``)."""
+def timenotes_update_project(project_id: str, fields: dict[str, Any]) -> Any:
+    """Patch fields on a project (e.g. ``{"name": ..., "client_id": ..., "color": ...}``)."""
     _require_auth()
     if not fields:
         raise ValueError("Provide at least one field to update.")
@@ -582,16 +646,18 @@ def timenotes_get_task(project_id: str, task_id: str) -> Any:
 
 
 @mcp.tool()
-def timenotes_create_task(project_id: str, name: str, **fields: Any) -> Any:
+def timenotes_create_task(
+    project_id: str, name: str, fields: dict[str, Any] | None = None
+) -> Any:
     """Create a task on a project."""
     _require_auth()
-    body = {"name": name, **fields}
+    body = {"name": name, **(fields or {})}
     return _safe(_client.create_task(project_id, body))
 
 
 @mcp.tool()
-def timenotes_update_task(project_id: str, task_id: str, **fields: Any) -> Any:
-    """Patch fields on a task."""
+def timenotes_update_task(project_id: str, task_id: str, fields: dict[str, Any]) -> Any:
+    """Patch fields on a task. ``fields`` is an object of API fields to change."""
     _require_auth()
     if not fields:
         raise ValueError("Provide at least one field to update.")
@@ -623,15 +689,15 @@ def timenotes_unbookmark_task(project_id: str, task_id: str) -> Any:
 # --- tags CRUD -------------------------------------------------------------
 
 @mcp.tool()
-def timenotes_create_tag(name: str, **fields: Any) -> Any:
+def timenotes_create_tag(name: str, fields: dict[str, Any] | None = None) -> Any:
     """Create a tag."""
     _require_auth()
-    return _safe(_client.create_tag({"name": name, **fields}))
+    return _safe(_client.create_tag({"name": name, **(fields or {})}))
 
 
 @mcp.tool()
-def timenotes_update_tag(tag_id: str, **fields: Any) -> Any:
-    """Patch fields on a tag."""
+def timenotes_update_tag(tag_id: str, fields: dict[str, Any]) -> Any:
+    """Patch fields on a tag. ``fields`` is an object of API fields to change."""
     _require_auth()
     if not fields:
         raise ValueError("Provide at least one field to update.")
@@ -656,8 +722,8 @@ def timenotes_list_alerts() -> Any:
 
 
 @mcp.tool()
-def timenotes_update_alert(alert_id: str, **fields: Any) -> Any:
-    """Patch an alert (e.g. mark read)."""
+def timenotes_update_alert(alert_id: str, fields: dict[str, Any]) -> Any:
+    """Patch an alert (e.g. ``{"read": true}``)."""
     _require_auth()
     return _safe(_client.update_alert(alert_id, fields))
 
@@ -697,19 +763,20 @@ def timenotes_create_absence_request(
     date_from: str,
     date_to: str,
     description: str | None = None,
-    **fields: Any,
+    fields: dict[str, Any] | None = None,
 ) -> Any:
     """Create an absence request (e.g. vacation, sick day)."""
     _require_auth()
-    body = {"absence_type_id": absence_type_id, "date_from": date_from, "date_to": date_to, **fields}
+    body = {"absence_type_id": absence_type_id, "date_from": date_from,
+            "date_to": date_to, **(fields or {})}
     if description is not None:
         body["description"] = description
     return _safe(_client.create_absence_request(body))
 
 
 @mcp.tool()
-def timenotes_update_absence_request(request_id: str, **fields: Any) -> Any:
-    """Patch fields on an absence request."""
+def timenotes_update_absence_request(request_id: str, fields: dict[str, Any]) -> Any:
+    """Patch fields on an absence request. ``fields`` is an object of API fields to change."""
     _require_auth()
     if not fields:
         raise ValueError("Provide at least one field to update.")
@@ -776,17 +843,19 @@ def timenotes_list_invitations() -> Any:
 
 
 @mcp.tool()
-def timenotes_invite_member(email: str, **fields: Any) -> Any:
+def timenotes_invite_member(email: str, fields: dict[str, Any] | None = None) -> Any:
     """Invite a new member by email."""
     _require_auth()
-    return _safe(_client.create_invitation({"email": email, **fields}))
+    return _safe(_client.create_invitation({"email": email, **(fields or {})}))
 
 
 @mcp.tool()
-def timenotes_bulk_invite_members(emails: list[str], **fields: Any) -> Any:
+def timenotes_bulk_invite_members(
+    emails: list[str], fields: dict[str, Any] | None = None
+) -> Any:
     """Invite many members at once."""
     _require_auth()
-    body = {"emails": emails, **fields}
+    body = {"emails": emails, **(fields or {})}
     return _safe(_client.bulk_create_invitations(body))
 
 
@@ -815,15 +884,15 @@ def timenotes_list_members_groups() -> Any:
 
 
 @mcp.tool()
-def timenotes_create_members_group(name: str, **fields: Any) -> Any:
+def timenotes_create_members_group(name: str, fields: dict[str, Any] | None = None) -> Any:
     """Create a member group / team."""
     _require_auth()
-    return _safe(_client.create_members_group({"name": name, **fields}))
+    return _safe(_client.create_members_group({"name": name, **(fields or {})}))
 
 
 @mcp.tool()
-def timenotes_update_members_group(group_id: str, **fields: Any) -> Any:
-    """Patch fields on a member group."""
+def timenotes_update_members_group(group_id: str, fields: dict[str, Any]) -> Any:
+    """Patch fields on a member group. ``fields`` is an object of API fields to change."""
     _require_auth()
     if not fields:
         raise ValueError("Provide at least one field to update.")
@@ -871,8 +940,8 @@ def timenotes_get_setting() -> Any:
 
 
 @mcp.tool()
-def timenotes_update_setting(**fields: Any) -> Any:
-    """Patch workspace settings."""
+def timenotes_update_setting(fields: dict[str, Any]) -> Any:
+    """Patch workspace settings. ``fields`` is an object of API fields to change."""
     _require_auth()
     if not fields:
         raise ValueError("Provide at least one field to update.")

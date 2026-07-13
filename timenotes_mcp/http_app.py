@@ -290,13 +290,6 @@ async def _token(request: Request) -> Response:
     cfg: HttpConfig = request.app.state.cfg
     form = await request.form()
     grant_type = form.get("grant_type")
-    if grant_type != "authorization_code":
-        return JSONResponse(
-            {"error": "unsupported_grant_type"}, status_code=400,
-        )
-    code = form.get("code")
-    redirect_uri = form.get("redirect_uri")
-    code_verifier = form.get("code_verifier")
     client_id = form.get("client_id")
 
     # Allow client_id via Basic auth for confidential clients.
@@ -304,23 +297,39 @@ async def _token(request: Request) -> Response:
     if basic:
         client_id = client_id or basic[0]
 
-    if not all([code, redirect_uri, client_id]):
-        return JSONResponse({"error": "invalid_request"}, status_code=400)
+    if grant_type == "authorization_code":
+        code = form.get("code")
+        redirect_uri = form.get("redirect_uri")
+        code_verifier = form.get("code_verifier")
+        if not all([code, redirect_uri, client_id]):
+            return JSONResponse({"error": "invalid_request"}, status_code=400)
+        consumed = cfg.store.consume_code(
+            code=code, client_id=client_id, redirect_uri=redirect_uri,
+            code_verifier=code_verifier,
+        )
+    elif grant_type == "refresh_token":
+        refresh = form.get("refresh_token")
+        if not all([refresh, client_id]):
+            return JSONResponse({"error": "invalid_request"}, status_code=400)
+        consumed = cfg.store.consume_refresh_token(
+            refresh_token=refresh, client_id=client_id,
+        )
+    else:
+        return JSONResponse(
+            {"error": "unsupported_grant_type"}, status_code=400,
+        )
 
-    consumed = cfg.store.consume_code(
-        code=code, client_id=client_id, redirect_uri=redirect_uri,
-        code_verifier=code_verifier,
-    )
     if not consumed:
         return JSONResponse({"error": "invalid_grant"}, status_code=400)
 
-    access_token, expires_in = cfg.store.issue_token(
+    access_token, expires_in, refresh_token = cfg.store.issue_token(
         client_id=client_id, scope=consumed.get("scope"),
     )
     return JSONResponse({
         "access_token": access_token,
         "token_type": "Bearer",
         "expires_in": expires_in,
+        "refresh_token": refresh_token,
         "scope": consumed.get("scope") or "mcp",
     })
 

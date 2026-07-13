@@ -133,7 +133,27 @@ def main() -> None:
             })
             r.raise_for_status()
             access_token = r.json()["access_token"]
+            refresh_token = r.json()["refresh_token"]
             print(f"[token] access_token={access_token[:8]}…  expires_in={r.json()['expires_in']}")
+
+            # 5b. Refresh — silent renewal must work and rotate the token
+            r = c.post(f"{base}/token", data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+            })
+            r.raise_for_status()
+            body = r.json()
+            assert body["refresh_token"] != refresh_token, "refresh token not rotated"
+            access_token = body["access_token"]
+            # old refresh token must be dead
+            r = c.post(f"{base}/token", data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+            })
+            assert r.status_code == 400, "reused refresh token should be rejected"
+            print(f"[token-refresh] rotated ok, new access_token={access_token[:8]}…")
 
             # 6. MCP call — initialize then tools/list
             mcp_url = f"{base}/mcp/"

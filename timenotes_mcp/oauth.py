@@ -34,6 +34,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 CODE_TTL_SECONDS = 5 * 60               # auth codes live 5 minutes
 TOKEN_TTL_SECONDS = 24 * 60 * 60        # bearer tokens live 24 hours
+REFRESH_TTL_SECONDS = 180 * 24 * 60 * 60  # refresh tokens live 6 months, rotated on use
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS oauth_clients (
@@ -60,6 +61,15 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
 
 CREATE TABLE IF NOT EXISTS oauth_tokens (
     access_token TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    scope TEXT,
+    expires_at INTEGER NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+    refresh_token TEXT PRIMARY KEY,
     client_id TEXT NOT NULL,
     scope TEXT,
     expires_at INTEGER NOT NULL,
@@ -264,15 +274,42 @@ class OAuthStore:
     # access tokens
     # ------------------------------------------------------------------
 
-    def issue_token(self, *, client_id: str, scope: str | None) -> tuple[str, int]:
+    def issue_token(self, *, client_id: str, scope: str | None) -> tuple[str, int, str]:
         token = _random_token(32)
-        expires_at = _now() + TOKEN_TTL_SECONDS
+        refresh = _random_token(32)
+        now = _now()
         with self._conn() as c:
             c.execute(
                 "INSERT INTO oauth_tokens VALUES (?,?,?,?,0,?)",
-                (token, client_id, scope, expires_at, _now()),
+                (token, client_id, scope, now + TOKEN_TTL_SECONDS, now),
             )
-        return token, TOKEN_TTL_SECONDS
+            c.execute(
+                "INSERT INTO oauth_refresh_tokens VALUES (?,?,?,?,0,?)",
+                (refresh, client_id, scope, now + REFRESH_TTL_SECONDS, now),
+            )
+        return token, TOKEN_TTL_SECONDS, refresh
+
+    def consume_refresh_token(
+        self, *, refresh_token: str, client_id: str
+    ) -> dict[str, Any] | None:
+        """Atomically consume (rotate) a refresh token. Returns the row or None."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT * FROM oauth_refresh_tokens"
+                " WHERE refresh_token = ? AND revoked = 0",
+                (refresh_token,),
+            ).fetchone()
+            if not row:
+                return None
+            if row["client_id"] != client_id:
+                return None
+            if row["expires_at"] < _now():
+                return None
+            c.execute(
+                "UPDATE oauth_refresh_tokens SET revoked = 1 WHERE refresh_token = ?",
+                (refresh_token,),
+            )
+        return dict(row)
 
     def lookup_token(self, access_token: str) -> dict[str, Any] | None:
         with self._conn() as c:
@@ -333,6 +370,7 @@ class OAuthStore:
         with self._conn() as c:
             c.execute("DELETE FROM oauth_codes WHERE expires_at < ?", (_now(),))
             c.execute("DELETE FROM oauth_tokens WHERE expires_at < ?", (_now(),))
+            c.execute("DELETE FROM oauth_refresh_tokens WHERE expires_at < ?", (_now(),))
 
 
 def load_or_create_encryption_key(state_dir: Path) -> bytes:
