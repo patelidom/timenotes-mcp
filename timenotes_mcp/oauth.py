@@ -249,26 +249,40 @@ class OAuthStore:
     ) -> dict[str, Any] | None:
         """Atomically consume an authorization code. Returns the stored row or None."""
         with self._conn() as c:
-            row = c.execute(
-                "SELECT * FROM oauth_codes WHERE code = ? AND used = 0", (code,)
-            ).fetchone()
-            if not row:
-                return None
-            if row["client_id"] != client_id:
-                return None
-            if row["redirect_uri"] != redirect_uri:
-                return None
-            if row["expires_at"] < _now():
-                return None
-            if row["code_challenge"]:
-                if not verify_pkce(
-                    code_verifier or "",
-                    row["code_challenge"],
-                    row["code_challenge_method"] or "plain",
-                ):
+            c.execute("BEGIN IMMEDIATE")
+            try:
+                row = c.execute(
+                    "SELECT * FROM oauth_codes WHERE code = ? AND used = 0", (code,)
+                ).fetchone()
+                if not row:
+                    c.execute("ROLLBACK")
                     return None
-            c.execute("UPDATE oauth_codes SET used = 1 WHERE code = ?", (code,))
-        return dict(row)
+                if row["client_id"] != client_id:
+                    c.execute("ROLLBACK")
+                    return None
+                if row["redirect_uri"] != redirect_uri:
+                    c.execute("ROLLBACK")
+                    return None
+                if row["expires_at"] < _now():
+                    c.execute("ROLLBACK")
+                    return None
+                if row["code_challenge"]:
+                    if not verify_pkce(
+                        code_verifier or "",
+                        row["code_challenge"],
+                        row["code_challenge_method"] or "plain",
+                    ):
+                        c.execute("ROLLBACK")
+                        return None
+                c.execute("UPDATE oauth_codes SET used = 1 WHERE code = ?", (code,))
+                c.execute("COMMIT")
+                return dict(row)
+            except Exception:
+                try:
+                    c.execute("ROLLBACK")
+                except sqlite3.OperationalError:
+                    pass
+                raise
 
     # ------------------------------------------------------------------
     # access tokens
@@ -279,14 +293,20 @@ class OAuthStore:
         refresh = _random_token(32)
         now = _now()
         with self._conn() as c:
-            c.execute(
-                "INSERT INTO oauth_tokens VALUES (?,?,?,?,0,?)",
-                (token, client_id, scope, now + TOKEN_TTL_SECONDS, now),
-            )
-            c.execute(
-                "INSERT INTO oauth_refresh_tokens VALUES (?,?,?,?,0,?)",
-                (refresh, client_id, scope, now + REFRESH_TTL_SECONDS, now),
-            )
+            c.execute("BEGIN IMMEDIATE")
+            try:
+                c.execute(
+                    "INSERT INTO oauth_tokens VALUES (?,?,?,?,0,?)",
+                    (token, client_id, scope, now + TOKEN_TTL_SECONDS, now),
+                )
+                c.execute(
+                    "INSERT INTO oauth_refresh_tokens VALUES (?,?,?,?,0,?)",
+                    (refresh, client_id, scope, now + REFRESH_TTL_SECONDS, now),
+                )
+                c.execute("COMMIT")
+            except Exception:
+                c.execute("ROLLBACK")
+                raise
         return token, TOKEN_TTL_SECONDS, refresh
 
     def consume_refresh_token(
@@ -294,22 +314,47 @@ class OAuthStore:
     ) -> dict[str, Any] | None:
         """Atomically consume (rotate) a refresh token. Returns the row or None."""
         with self._conn() as c:
-            row = c.execute(
-                "SELECT * FROM oauth_refresh_tokens"
-                " WHERE refresh_token = ? AND revoked = 0",
-                (refresh_token,),
-            ).fetchone()
-            if not row:
-                return None
-            if row["client_id"] != client_id:
-                return None
-            if row["expires_at"] < _now():
-                return None
-            c.execute(
-                "UPDATE oauth_refresh_tokens SET revoked = 1 WHERE refresh_token = ?",
-                (refresh_token,),
-            )
-        return dict(row)
+            c.execute("BEGIN IMMEDIATE")
+            try:
+                row = c.execute(
+                    "SELECT * FROM oauth_refresh_tokens"
+                    " WHERE refresh_token = ?",
+                    (refresh_token,),
+                ).fetchone()
+                if not row:
+                    c.execute("ROLLBACK")
+                    return None
+                if row["client_id"] != client_id:
+                    c.execute("ROLLBACK")
+                    return None
+                if row["expires_at"] < _now():
+                    c.execute("ROLLBACK")
+                    return None
+                if row["revoked"] == 1:
+                    # REUSE ATTEMPT DETECTED!
+                    # Revoke all tokens issued to this client
+                    c.execute(
+                        "UPDATE oauth_refresh_tokens SET revoked = 1 WHERE client_id = ?",
+                        (client_id,),
+                    )
+                    c.execute(
+                        "UPDATE oauth_tokens SET revoked = 1 WHERE client_id = ?",
+                        (client_id,),
+                    )
+                    c.execute("COMMIT")
+                    return {"reuse": True}
+                c.execute(
+                    "UPDATE oauth_refresh_tokens SET revoked = 1 WHERE refresh_token = ?",
+                    (refresh_token,),
+                )
+                c.execute("COMMIT")
+                return dict(row)
+            except Exception:
+                try:
+                    c.execute("ROLLBACK")
+                except sqlite3.OperationalError:
+                    pass
+                raise
 
     def lookup_token(self, access_token: str) -> dict[str, Any] | None:
         with self._conn() as c:
@@ -329,6 +374,23 @@ class OAuthStore:
                 "UPDATE oauth_tokens SET revoked = 1 WHERE access_token = ?",
                 (access_token,),
             )
+
+    def revoke_token_any(self, token: str, client_id: str) -> None:
+        with self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            try:
+                c.execute(
+                    "UPDATE oauth_tokens SET revoked = 1 WHERE access_token = ? AND client_id = ?",
+                    (token, client_id),
+                )
+                c.execute(
+                    "UPDATE oauth_refresh_tokens SET revoked = 1 WHERE refresh_token = ? AND client_id = ?",
+                    (token, client_id),
+                )
+                c.execute("COMMIT")
+            except Exception:
+                c.execute("ROLLBACK")
+                raise
 
     # ------------------------------------------------------------------
     # Timenotes session (single row, encrypted)
@@ -368,9 +430,9 @@ class OAuthStore:
 
     def purge_expired(self) -> None:
         with self._conn() as c:
-            c.execute("DELETE FROM oauth_codes WHERE expires_at < ?", (_now(),))
-            c.execute("DELETE FROM oauth_tokens WHERE expires_at < ?", (_now(),))
-            c.execute("DELETE FROM oauth_refresh_tokens WHERE expires_at < ?", (_now(),))
+            c.execute("DELETE FROM oauth_codes WHERE expires_at < ? OR used = 1", (_now(),))
+            c.execute("DELETE FROM oauth_tokens WHERE expires_at < ? OR revoked = 1", (_now(),))
+            c.execute("DELETE FROM oauth_refresh_tokens WHERE expires_at < ? OR revoked = 1", (_now(),))
 
 
 def load_or_create_encryption_key(state_dir: Path) -> bytes:

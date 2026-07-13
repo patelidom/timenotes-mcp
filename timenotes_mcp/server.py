@@ -172,6 +172,8 @@ def timenotes_list_tasks(
     it over paging through everything. At most ``limit`` tasks are returned;
     ``total`` in the response tells you how many matched.
     """
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
     _require_auth()
     data = _client.list_tasks(project_id)
     tasks = data.get("tasks", []) if isinstance(data, dict) else []
@@ -194,7 +196,7 @@ def _compact_task(t: dict[str, Any]) -> dict[str, Any]:
     for k in ("description", "time_estimate_duration", "worktime", "billable_rate",
               "is_billable", "bookmarked", "recently_tracked", "tags"):
         v = t.get(k)
-        if v not in (None, [], False):
+        if v is not None and v != "" and v != [] and v is not False:
             keep[k] = v
     return keep
 

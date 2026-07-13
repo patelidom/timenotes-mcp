@@ -45,11 +45,10 @@ class TimenotesClient:
         self.base_url = base_url.rstrip("/")
         # Derive the v2 base from the (possibly overridden) v1 base so that
         # TIMENOTES_BASE_URL redirects BOTH API versions, not just v1.
-        self.v2_base_url = (
-            self.base_url[: -len("/v1")] + "/v2"
-            if self.base_url.endswith("/v1")
-            else V2_BASE_URL
-        )
+        if "/v1" in self.base_url:
+            self.v2_base_url = self.base_url.replace("/v1", "/v2")
+        else:
+            self.v2_base_url = self.base_url + "/v2"
         self.access_token = access_token
         self.account_id = account_id
         self.user: dict[str, Any] | None = None
@@ -175,12 +174,28 @@ class TimenotesClient:
 
     def list_tasks(self, project_id: str | int) -> Any:
         # Tasks listing is only available on v2; v1 404s.
-        return self._request(
-            "GET",
-            f"/projects/{project_id}/tasks",
-            params={"per_page": 1000},
-            base_url=self.v2_base_url,
-        )
+        # Paginate to fetch all tasks (a project can have hundreds or thousands).
+        out: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            data = self._request(
+                "GET",
+                f"/projects/{project_id}/tasks",
+                params={"per_page": 250, "page": page},
+                base_url=self.v2_base_url,
+            )
+            items = data.get("tasks", []) if isinstance(data, Mapping) else []
+            if not items:
+                break
+            out.extend(items)
+            meta = data.get("meta", {}) if isinstance(data, Mapping) else {}
+            pg = meta.get("pagination", {}) if isinstance(meta, Mapping) else {}
+            current = pg.get("current_page", page)
+            total_pages = pg.get("total_pages", current)
+            if current >= total_pages:
+                break
+            page = current + 1
+        return {"tasks": out}
 
     def list_tags(self) -> Any:
         return self._request("GET", "/tags", params={"per_page": 1000}, base_url=self.v2_base_url)

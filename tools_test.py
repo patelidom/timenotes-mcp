@@ -48,7 +48,41 @@ def main() -> None:
     ))
     assert captured["body"] == {"name": "P2", "color": "#f00"}, captured
 
-    print("ALL TOOL-SHAPE CHECKS PASSED")
+    # 4. Custom base URL derivation without fallback to production.
+    from timenotes_mcp.client import TimenotesClient
+    c1 = TimenotesClient(base_url="https://timenotes-mcp.dpstudio.cz/api/v1")
+    assert c1.v2_base_url == "https://timenotes-mcp.dpstudio.cz/api/v2", c1.v2_base_url
+    c2 = TimenotesClient(base_url="https://timenotes-mcp.dpstudio.cz/api")
+    assert c2.v2_base_url == "https://timenotes-mcp.dpstudio.cz/api/v2", c2.v2_base_url
+
+    # 5. _compact_task does not discard 0 or 0.0 values.
+    from timenotes_mcp.server import _compact_task
+    t = {
+        "id": "t-1",
+        "name": "Task 1",
+        "state": "active",
+        "worktime": 0,
+        "billable_rate": 0.0,
+        "description": "",
+        "tags": [],
+        "is_billable": False,
+    }
+    compacted = _compact_task(t)
+    assert compacted["worktime"] == 0, compacted
+    assert compacted["billable_rate"] == 0.0, compacted
+    assert "description" not in compacted, compacted
+    assert "tags" not in compacted, compacted
+    assert "is_billable" not in compacted, compacted
+
+    # 6. timenotes_list_tasks raises ValueError on negative limit.
+    from timenotes_mcp.server import timenotes_list_tasks
+    try:
+        timenotes_list_tasks(project_id="p-1", limit=-1)
+        assert False, "Should raise ValueError for negative limit"
+    except ValueError:
+        pass
+
+    print("ALL TOOL-SHAPE AND UNIT CHECKS PASSED")
 
 
 if __name__ == "__main__":
