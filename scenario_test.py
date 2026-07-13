@@ -119,7 +119,11 @@ async def time_logs(req: Request):
                "client": {"id": "c-1", "name": "Acme"}}
         state["time_logs"].append(log)
         return JSONResponse({"time_log": log})
-    # GET: paginate with a small server-side cap to exercise the paging loop.
+    # GET. The real API rejects single-day ranges with an empty 422 — mirror
+    # that so the client-side widening workaround stays covered.
+    if req.query_params.get("from") and req.query_params.get("from") == req.query_params.get("to"):
+        return Response(status_code=422)
+    # Paginate with a small server-side cap to exercise the paging loop.
     page = int(req.query_params.get("page", 1))
     per_page = min(int(req.query_params.get("per_page", 100)), 2)
     logs = state["time_logs"]

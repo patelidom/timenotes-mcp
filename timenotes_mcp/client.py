@@ -514,11 +514,22 @@ class TimenotesClient:
         per_page: int = 100,
         page: int = 1,
     ) -> Any:
-        return self._request(
+        from_date, to_date, only_day = _widen_single_day(from_date, to_date)
+        data = self._request(
             "GET",
             "/time_logs",
             params={"from": from_date, "to": to_date, "per_page": per_page, "page": page},
         )
+        if only_day and isinstance(data, Mapping):
+            data = dict(data)
+            data["time_logs"] = _filter_day(data.get("time_logs", []), only_day)
+            # ponytail: meta still counts the widened window; correct enough
+            # for single-day volumes, fix per-page slicing if it ever matters.
+            meta = dict(data.get("meta") or {})
+            meta["pagination"] = {"current_page": 1, "total_pages": 1,
+                                  "total_count": len(data["time_logs"])}
+            data["meta"] = meta
+        return data
 
     def create_time_log(self, time_log: Mapping[str, Any]) -> Any:
         """Create a time log.
@@ -747,6 +758,7 @@ class TimenotesClient:
 
     def _all_time_logs(self, *, from_date: str, to_date: str) -> list[dict[str, Any]]:
         """Fetch every time log in a date range, paging through results."""
+        from_date, to_date, only_day = _widen_single_day(from_date, to_date)
         out: list[dict[str, Any]] = []
         page = 1
         while True:
@@ -771,7 +783,7 @@ class TimenotesClient:
             if current >= total_pages:
                 break
             page = current + 1
-        return out
+        return _filter_day(out, only_day) if only_day else out
 
     def time_per_client(self, *, from_date: str, to_date: str) -> list[dict[str, Any]]:
         """Sum durations per client across the given date range."""
@@ -813,6 +825,33 @@ class TimenotesClient:
 
 def _drop_none(m: Mapping[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in m.items() if v is not None}
+
+
+def _widen_single_day(
+    from_date: str | None, to_date: str | None
+) -> tuple[str | None, str | None, str | None]:
+    """Work around the API rejecting single-day ranges.
+
+    ``GET /time_logs`` returns an empty 422 when ``from == to`` (verified live;
+    datetime bounds 422 as well). ``to`` is inclusive, so we widen the window
+    by one day and return the requested date so callers can filter back down.
+    """
+    if not (from_date and to_date and from_date == to_date):
+        return from_date, to_date, None
+    from datetime import date, timedelta
+    try:
+        next_day = (date.fromisoformat(to_date) + timedelta(days=1)).isoformat()
+    except ValueError:
+        return from_date, to_date, None  # non-ISO input: let the API complain
+    return from_date, next_day, from_date
+
+
+def _filter_day(logs: list[dict[str, Any]], day: str) -> list[dict[str, Any]]:
+    """Keep only logs whose start_at falls on ``day`` (YYYY-MM-DD)."""
+    return [
+        log for log in logs
+        if isinstance(log, Mapping) and (log.get("start_at") or "")[:10] == day
+    ]
 
 
 def _to_dmy(date_str: str) -> str:
