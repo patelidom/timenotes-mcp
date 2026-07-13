@@ -33,6 +33,8 @@ mcp = FastMCP(
         "(e.g. {\"name\": ...}).\n"
         "- Aggregations (timenotes_time_per_client/project/task/day) return minutes and hours, "
         "sorted descending.\n"
+        "- Date-range endpoints reject single-day ranges (from_date == to_date) with an "
+        "empty 422 — query at least two days and filter the extra day out yourself.\n"
         "- If a call fails with 'Not authenticated', credentials are missing on the server side "
         "(env vars or OAuth login) — tell the user; do not guess credentials.\n"
         "- delete_* and bulk_* tools are destructive and irreversible; confirm with the user first."

@@ -146,14 +146,9 @@ def main() -> None:
             body = r.json()
             assert body["refresh_token"] != refresh_token, "refresh token not rotated"
             access_token = body["access_token"]
-            # old refresh token must be dead
-            r = c.post(f"{base}/token", data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": client_id,
-            })
-            assert r.status_code == 400, "reused refresh token should be rejected"
             print(f"[token-refresh] rotated ok, new access_token={access_token[:8]}…")
+            # NOTE: replaying the OLD refresh token is tested at the very end —
+            # reuse detection revokes the whole chain, killing access_token too.
 
             # 6. MCP call — initialize then tools/list
             mcp_url = f"{base}/mcp/"
@@ -219,6 +214,23 @@ def main() -> None:
             content = call_resp.get("result", {}).get("content", [])
             print(f"[mcp/whoami] content_blocks={len(content)}")
             print(f"  preview: {(content[0].get('text','') if content else '')[:120]}")
+
+            # 7. Refresh-token reuse detection (RFC 9700): replaying the OLD
+            # refresh token must 400 AND revoke the whole chain — including
+            # the access token we've been using above.
+            r = c.post(f"{base}/token", data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+            })
+            assert r.status_code == 400, "reused refresh token should be rejected"
+            r = c.post(mcp_url, headers=mcp_headers, json={
+                "jsonrpc": "2.0", "id": 4, "method": "tools/list",
+            })
+            assert r.status_code == 401, (
+                f"access token should be dead after reuse detection, got {r.status_code}"
+            )
+            print("[token-reuse] rejected and whole chain revoked (access token now 401)")
 
             print("\nALL OAUTH + MCP CHECKS PASSED")
 
