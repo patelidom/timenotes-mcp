@@ -20,6 +20,11 @@ services:
       #   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
       TIMENOTES_OAUTH_SECRET: "${TIMENOTES_OAUTH_SECRET:-}"
 
+      # Optional: Timenotes API token (Settings > Profile). When set it seeds the
+      # encrypted store on start; otherwise it is entered in the OAuth login form.
+      TIMENOTES_API_TOKEN: "${TIMENOTES_API_TOKEN:-}"
+      TIMENOTES_TIMEZONE: "${TIMENOTES_TIMEZONE:-Europe/Prague}"
+
       TIMENOTES_MCP_LOG_LEVEL: "${TIMENOTES_MCP_LOG_LEVEL:-INFO}"
 
     volumes:

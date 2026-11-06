@@ -1,7 +1,7 @@
 [project]
 name = "timenotes-mcp"
-version = "0.1.0"
-description = "Model Context Protocol server wrapping the Timenotes.io time-tracking API for LLM agents (Claude, Hermes, etc)."
+version = "0.2.0"
+description = "Model Context Protocol server for the official Timenotes.io Platform API for LLM agents (Claude, Hermes, etc)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -22,7 +22,7 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-  "mcp>=1.2.0",
+  "mcp>=2.3,<3",
   "httpx>=0.27.0",
 ]
 

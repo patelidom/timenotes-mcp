@@ -4,11 +4,11 @@ Spawns the HTTP server in a background thread, then runs a fake Claude.ai
 client through the full handshake:
   1. POST /register             — Dynamic Client Registration
   2. GET  /authorize            — render login form
-  3. POST /authorize            — submit Timenotes creds
+  3. POST /authorize            — submit the Timenotes API token
   4. POST /token                — exchange code for access token
   5. POST /mcp/                 — initialize + tools/list using the bearer token
 
-The Timenotes credentials come from .secrets so the login is real.
+The API token comes from TIMENOTES_API_TOKEN so the login is real.
 """
 
 from __future__ import annotations
@@ -42,8 +42,7 @@ def _b64url(data: bytes) -> str:
 
 
 def main() -> None:
-    email = os.environ["TIMENOTES_EMAIL"]
-    password = os.environ["TIMENOTES_PASSWORD"]
+    api_token = os.environ["TIMENOTES_API_TOKEN"]
 
     port = _free_port()
     base = f"http://127.0.0.1:{port}"
@@ -109,11 +108,10 @@ def main() -> None:
             state_token = m.group(1)
             print(f"[authorize-get] state_token={state_token[:8]}…")
 
-            # 4. Authorize (POST) — submit Timenotes credentials
+            # 4. Authorize (POST) — submit the Timenotes API token
             r = c.post(f"{base}/authorize", data={
                 "state_token": state_token,
-                "email": email,
-                "password": password,
+                "api_token": api_token,
             })
             assert r.status_code == 303, f"expected 303 redirect, got {r.status_code}: {r.text[:200]}"
             location = r.headers["location"]

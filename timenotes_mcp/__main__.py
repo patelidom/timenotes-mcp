@@ -3,12 +3,12 @@
 Two transports:
 
 * ``stdio`` (default) — local subprocess, the way Claude Desktop / Claude Code
-  / Hermes spawn an MCP server. Credentials come from env / ``.secrets``.
+  / Hermes spawn an MCP server. The API token comes from ``TIMENOTES_API_TOKEN``.
 
 * ``http`` — Streamable HTTP transport with an OAuth 2.0 wrapper. For
   self-hosting on a domain so Claude.ai can connect to it as a custom
-  connector. Credentials are entered through the web login form (Timenotes
-  email + password).
+  connector. The API token is pasted into the OAuth login form (or seeded
+  from ``TIMENOTES_API_TOKEN``).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-from .server import auto_login_from_env, mcp
+from .server import mcp
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -58,7 +58,6 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     if args.transport == "stdio":
-        auto_login_from_env()
         mcp.run()
         return
 

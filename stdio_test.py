@@ -1,6 +1,6 @@
 """Smoke-test the MCP server via real JSON-RPC over stdio.
 
-Spawns ``python -m timenotes_mcp`` as a subprocess and exchanges three
+Spawns ``python -m timenotes_mcp`` (needs TIMENOTES_API_TOKEN) and exchanges three
 messages with it:
 
   1. ``initialize``           — handshake

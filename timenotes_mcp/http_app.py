@@ -1,8 +1,8 @@
 """Starlette ASGI app for the remote MCP transport.
 
 Adds an OAuth 2.0 authorization-server in front of the FastMCP Streamable HTTP
-endpoint. The login form authenticates the user against Timenotes itself —
-that's the only credential we ever ask for.
+endpoint. The login form asks for the Timenotes API token and validates it
+against the API — that's the only credential we ever ask for.
 
 Layout:
     /                                   -> redirect to /authorize
@@ -10,7 +10,7 @@ Layout:
     /.well-known/oauth-protected-resource    -> resource metadata (RFC 9728)
     /register                           -> Dynamic Client Registration (RFC 7591)
     /authorize          (GET)           -> render login form
-    /authorize          (POST)          -> validate Timenotes creds, redirect with code
+    /authorize          (POST)          -> validate Timenotes API token, redirect with code
     /token              (POST)          -> exchange code for access token
     /mcp/*                              -> Streamable HTTP MCP endpoint (Bearer-protected)
 """
@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
+import httpx
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
@@ -36,7 +37,7 @@ from starlette.routing import Mount, Route
 
 from .client import TimenotesClient, TimenotesError
 from .oauth import OAuthStore, parse_basic_auth, split_scope, _random_token  # noqa: F401
-from .server import mcp, set_session
+from .server import get_client, mcp, set_session
 
 
 log = logging.getLogger("timenotes_mcp.http")
@@ -224,36 +225,34 @@ async def _authorize_post(request: Request) -> Response:
     form = await request.form()
 
     state_token = form.get("state_token")
-    email = (form.get("email") or "").strip()
-    password = form.get("password") or ""
+    api_token = (form.get("api_token") or "").strip()
 
     pending = _PENDING_AUTH.get(state_token or "")
     if not pending or pending["expires_at"] < time.time():
         raise HTTPException(400, "Authorization session expired — restart the flow.")
 
-    if not email or not password:
-        return _render_error(cfg, pending, state_token, "Email and password are required.")
+    if not api_token:
+        return _render_error(cfg, pending, state_token, "API token is required.")
 
-    # Authenticate against Timenotes itself.
-    client = cfg.store.get_client(pending["client_id"])
-    if not client:
+    if not cfg.store.get_client(pending["client_id"]):
         raise HTTPException(400, "Unknown client_id.")
 
-    tn = TimenotesClient()
+    # Validate the token against Timenotes itself.
+    tn = TimenotesClient(api_token=api_token, base_url=get_client().base_url)
     try:
-        tn.login(email, password)
+        user = (tn.request("GET", "/users/current") or {}).get("user") or {}
     except TimenotesError as exc:
-        msg = "Invalid Timenotes credentials." if exc.status == 401 else f"Timenotes error: {exc.body}"
+        msg = "Invalid Timenotes API token." if exc.status == 401 else f"Timenotes error: {exc.body}"
         return _render_error(cfg, pending, state_token, msg)
 
-    # Store the Timenotes session token (encrypted) and push it into the live
-    # MCP client so subsequent tool calls work.
-    cfg.store.save_timenotes_session(
-        token=tn.access_token or "",
-        account_id=tn.account_id,
-        email=email,
-    )
-    set_session(access_token=tn.access_token, account_id=tn.account_id, user=tn.user)
+    owner_error = _owner_error(cfg.store, user.get("email"))
+    if owner_error:
+        log.warning("Rejected authorization for %s: %s", user.get("email"), owner_error)
+        return _render_error(cfg, pending, state_token, owner_error)
+
+    # Store the token (encrypted) and push it into the live MCP client.
+    cfg.store.save_timenotes_session(token=api_token, account_id=None, email=user.get("email"))
+    set_session(api_token=api_token)
 
     # Issue an authorization code, redirect back to the OAuth client.
     code = cfg.store.create_code(
@@ -271,6 +270,33 @@ async def _authorize_post(request: Request) -> Response:
     redirect_url = pending["redirect_uri"]
     sep = "&" if urlsplit(redirect_url).query else "?"
     return RedirectResponse(f"{redirect_url}{sep}{urlencode(redirect_params)}", status_code=303)
+
+
+def _owner_error(store: OAuthStore, email: str | None) -> str | None:
+    """Single-owner lock: once a token is stored, only that Timenotes user may authorize.
+
+    Every bearer token shares the one stored Timenotes token, so letting another
+    account in would either hand them the owner's data or swap the owner's
+    token for theirs. Fails closed when the owner can't be determined.
+    """
+    saved = store.load_timenotes_session()
+    if not saved:
+        return None  # first login claims the server
+    owner = saved.get("email") or _token_email(saved["token"])
+    if not owner:
+        return "Can't verify this server's owner right now — try again later."
+    if (email or "").lower() != owner.lower():
+        return "This server is bound to a different Timenotes account."
+    return None
+
+
+def _token_email(token: str) -> str | None:
+    """Email of the Timenotes user behind ``token``; None if it can't be resolved."""
+    try:
+        tn = TimenotesClient(api_token=token, base_url=get_client().base_url)
+        return ((tn.request("GET", "/users/current") or {}).get("user") or {}).get("email")
+    except (TimenotesError, httpx.HTTPError):
+        return None
 
 
 def _render_error(cfg: HttpConfig, pending: dict, state_token: str, error: str) -> Response:
@@ -406,14 +432,10 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
         # Ensure the in-memory MCP client has the saved Timenotes session.
         # (Restart safety: process may have lost the in-memory session.)
-        from .server import get_client
-        if not get_client().access_token:
+        if not get_client().api_token:
             saved = cfg.store.load_timenotes_session()
             if saved:
-                set_session(
-                    access_token=saved["token"],
-                    account_id=saved.get("account_id"),
-                )
+                set_session(api_token=saved["token"])
 
         return await call_next(request)
 
@@ -457,25 +479,24 @@ def build_app(*, public_url: str, state_dir: Path, store: OAuthStore) -> Starlet
     """Construct the Starlette app combining OAuth + MCP."""
     cfg = HttpConfig(public_url=public_url, state_dir=state_dir, store=store)
 
-    # On startup, restore any saved Timenotes session into the in-memory client.
+    # TIMENOTES_API_TOKEN, when set, (re)seeds the store; the store is the
+    # single runtime source, so later redeploys without the env keep working.
+    env_token = os.getenv("TIMENOTES_API_TOKEN")
+    if env_token:
+        store.save_timenotes_session(token=env_token, account_id=None, email=None)
     saved = store.load_timenotes_session()
     if saved:
-        set_session(access_token=saved["token"], account_id=saved.get("account_id"))
-        log.info("Restored Timenotes session for %s", saved.get("email"))
-
-    # FastMCP gives us a Streamable HTTP ASGI app. We mount it under /mcp.
-    # Stateful sessions (stateless_http=False) are required by Claude.ai —
-    # in stateless mode tools/list comes back empty for it.
-    mcp.settings.streamable_http_path = "/"
-    mcp.settings.json_response = False
-    mcp.settings.stateless_http = False
+        set_session(api_token=saved["token"])
+        email = saved.get("email") or _token_email(saved["token"])
+        if email and not saved.get("email"):
+            store.save_timenotes_session(token=saved["token"], account_id=None, email=email)
+        log.info("Restored Timenotes API token (owner: %s)", email or "unknown")
 
     # MCP SDK's anti-DNS-rebinding middleware checks Host + Origin headers.
     # Without this, every request from the public hostname returns 421
-    # "Invalid Host header". Add the public host (and a few sensible
-    # localhost defaults so the docker healthcheck still works) to the
-    # allowlist; the Origin allowlist covers Claude's frontend.
-    from urllib.parse import urlsplit
+    # "Invalid Host header". Allow the public host (plus localhost so the
+    # docker healthcheck works); the Origin allowlist covers Claude's frontend.
+    from contextlib import asynccontextmanager
 
     from mcp.server.transport_security import TransportSecuritySettings
 
@@ -483,29 +504,28 @@ def build_app(*, public_url: str, state_dir: Path, store: OAuthStore) -> Starlet
     public_host = parsed.netloc
     public_origin = f"{parsed.scheme}://{parsed.netloc}"
 
-    mcp.settings.transport_security = TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=[
-            public_host,
-            "127.0.0.1:*", "localhost:*", "[::1]:*",
-        ],
-        allowed_origins=[
-            public_origin,
-            "https://claude.ai",
-            "http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*",
-        ],
+    # Mounted under /mcp. Stateful sessions (stateless_http=False) are required
+    # by Claude.ai — in stateless mode tools/list comes back empty for it.
+    mcp_app = mcp.streamable_http_app(
+        streamable_http_path="/",
+        json_response=False,
+        stateless_http=False,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[public_host, "127.0.0.1:*", "localhost:*", "[::1]:*"],
+            allowed_origins=[
+                public_origin,
+                "https://claude.ai",
+                "http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*",
+            ],
+        ),
     )
 
-    mcp_app = mcp.streamable_http_app()
-
-    # Forward the mcp app's lifespan into ours, otherwise the MCP session
-    # manager's task group never starts and every /mcp request 500s with
-    # "Task group is not initialized".
-    from contextlib import asynccontextmanager
-
+    # A mounted sub-app's lifespan never runs, so start the session manager
+    # here — otherwise every /mcp request fails with "Task group is not initialized".
     @asynccontextmanager
     async def lifespan(_app):
-        async with mcp_app.router.lifespan_context(mcp_app):
+        async with mcp.session_manager.run():
             yield
 
     routes = [

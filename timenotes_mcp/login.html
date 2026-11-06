@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Sign in — Timenotes MCP</title>
+  <title>Authorize — Timenotes MCP</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root { color-scheme: light dark; }
@@ -68,22 +68,18 @@
     <div class="brand"><span class="dot"></span> Timenotes MCP</div>
 
     <p class="muted">
-      Sign in with your <strong>Timenotes.io</strong> account to authorize
-      <strong>{{ client_name }}</strong>. Your password is sent to the
-      Timenotes API directly — this server never stores it.
+      Paste your <strong>Timenotes.io</strong> API token to authorize
+      <strong>{{ client_name }}</strong>. Find it in Timenotes under
+      <em>Settings &rsaquo; Profile</em>. It is stored encrypted on this server.
     </p>
 
     <input type="hidden" name="state_token" value="{{ state_token }}" />
 
-    <label for="email">Email</label>
-    <input id="email" name="email" type="email" required autofocus
-           autocomplete="username" />
+    <label for="api_token">API token</label>
+    <input id="api_token" name="api_token" type="password" required autofocus
+           autocomplete="off" />
 
-    <label for="password">Password</label>
-    <input id="password" name="password" type="password" required
-           autocomplete="current-password" />
-
-    <button type="submit">Sign in</button>
+    <button type="submit">Authorize</button>
 
     {% if error %}
     <div class="error">{{ error }}</div>
